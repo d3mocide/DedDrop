@@ -78,6 +78,21 @@ class TestPublicEndpoints(WebServerCase):
             _, _, headers = request(f"{self.base}/api/status")
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "https://example.com")
 
+    def test_preflight_is_refused_when_cors_is_off(self):
+        status, _, headers = request(f"{self.base}/api/wardrive", method="OPTIONS")
+        self.assertEqual(status, 405)
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_preflight_allows_the_ingest_request_when_cors_is_on(self):
+        with mock.patch.object(config, "CORS_ALLOW_ORIGIN", "https://example.com"):
+            status, _, headers = request(f"{self.base}/api/wardrive", method="OPTIONS")
+        self.assertEqual(status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "https://example.com")
+        self.assertIn("POST", headers.get("Access-Control-Allow-Methods", ""))
+        # The browser will not send the real request unless the key header is
+        # named here, since it is what makes the POST non-simple.
+        self.assertIn("X-API-Key", headers.get("Access-Control-Allow-Headers", ""))
+
     def test_healthz(self):
         status, body, _ = request(f"{self.base}/healthz")
         self.assertEqual(status, 200)

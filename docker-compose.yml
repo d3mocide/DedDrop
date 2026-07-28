@@ -4,9 +4,13 @@ services:
     container_name: deddrop
     restart: unless-stopped
     ports:
-      # Bind to 127.0.0.1 instead if you don't need MeshMapper to reach this
-      # box over the LAN: "127.0.0.1:${WEB_PORT:-8080}:8080"
-      - "${WEB_PORT:-8080}:8080"
+      # host-addr:host-port:container-port. WEB_PORT appears on both sides
+      # because the app inside the container binds WEB_PORT, not a fixed 8080.
+      # WEB_PUBLISH_ADDR picks which host interface the port is published on —
+      # 0.0.0.0 for LAN access (MeshMapper on your phone), 127.0.0.1 to keep it
+      # local-only. It is NOT the same knob as WEB_BIND, which is the address
+      # *inside* the container and should stay 0.0.0.0 under Docker.
+      - "${WEB_PUBLISH_ADDR:-0.0.0.0}:${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     environment:
       # ── Required ──
       TAR1090_URL: ${TAR1090_URL}
@@ -27,6 +31,8 @@ services:
       LATEST_RAW_PATH: ${LATEST_RAW_PATH:-/data/latest_raw.json}
       # ── Web dashboard & ingest ──
       WEB_ENABLED: ${WEB_ENABLED:-true}
+      # The container's own interfaces only. A host LAN address here cannot be
+      # assigned inside the container — publish on it with WEB_PUBLISH_ADDR.
       WEB_BIND: ${WEB_BIND:-0.0.0.0}
       WEB_PORT: ${WEB_PORT:-8080}
       WEB_DIR: ${WEB_DIR:-/app/web}

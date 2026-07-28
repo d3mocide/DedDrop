@@ -67,8 +67,9 @@
 | Variable | Default | Description |
 |---|---|---|
 | `WEB_ENABLED` | `true` | Enable/disable the web dashboard |
-| `WEB_BIND` | `0.0.0.0` | Bind address. Set `127.0.0.1` if MeshMapper doesn't need LAN access |
-| `WEB_PORT` | `8080` | Port for the web dashboard |
+| `WEB_BIND` | `0.0.0.0` | Bind address *inside* the container. Leave `0.0.0.0` under Docker |
+| `WEB_PUBLISH_ADDR` | `0.0.0.0` | Host interface docker publishes the port on. `127.0.0.1` if MeshMapper doesn't need LAN access (compose only — not read by the app) |
+| `WEB_PORT` | `8080` | Port for the web dashboard, on both the host and container side |
 | `WEB_DIR` | `<repo root>/web` | Directory containing `index.html` |
 | `PUBLIC_HOST` | *(empty)* | Public host/IP for the MeshMapper deep link (e.g. `192.168.1.100:8080`) |
 | `CORS_ALLOW_ORIGIN` | *(empty)* | Origin allowed to read the API cross-origin. Empty = same-origin only |
@@ -126,6 +127,11 @@ dashboard HTML — cannot drive these endpoints.
 
 Cross-origin reads are disabled by default. The API exposes accumulated telemetry,
 so only set `CORS_ALLOW_ORIGIN` if you specifically need another origin to read it.
+When it is set, `OPTIONS` preflights are answered for `Content-Type`, `X-API-Key`, and
+`X-Control-Token`; when it is empty, `OPTIONS` returns 405.
+
+`CORS_ALLOW_ORIGIN` has no bearing on reaching the dashboard in a browser — that is a
+same-origin load. If the dashboard itself won't load, see Troubleshooting.
 
 ## Protocol & Data Flow
 
@@ -208,6 +214,20 @@ mkdir -p ./data && sudo chown -R 1000:1000 ./data
 **Dashboard shows "Disconnected".** Check `docker compose logs deddrop`. If the web
 server could not bind its port, DedDrop logs the error and continues headless — polling
 and uploading still work.
+
+**`ERR_CONNECTION_REFUSED` on the dashboard.** This is a reachability problem, not a
+CORS one — a blocked cross-origin read returns a response the browser then refuses to
+hand to the page, so it never looks like a refused connection. Two causes, both visible
+in `docker compose logs deddrop`:
+
+- `Cannot assign requested address` — `WEB_BIND` is set to a LAN address of the *host*.
+  The container has no interface holding that address, so nothing ever listens. Leave
+  `WEB_BIND=0.0.0.0` and set `WEB_PUBLISH_ADDR` to the LAN address instead.
+- The log says `listening on http://0.0.0.0:<port>/` but the port still refuses. The
+  published port and the container port disagree. Check `docker compose ps`: a mapping
+  like `0.0.0.0:8989->8080/tcp` forwards to a container port nothing is bound to.
+  Both sides must be `WEB_PORT`, and the port line only re-reads `.env` on
+  `docker compose up -d`, not on `restart`.
 
 **`poll rejected all N aircraft in the feed`.** `TAR1090_URL` is reachable but isn't
 returning tar1090-shaped JSON, or the receiver has no position data. Confirm the URL
