@@ -1,0 +1,28 @@
+services:
+  deddrop:
+    build: .
+    container_name: deddrop
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    environment:
+      TAR1090_URL: ${TAR1090_URL}
+      WDGWARS_API_KEY: ${WDGWARS_API_KEY}
+      MESHMAPPER_API_KEY: ${MESHMAPPER_API_KEY:-}
+      WDGWARS_API_URL: ${WDGWARS_API_URL:-https://wdgwars.pl/endpoint/upload/}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      UPLOAD_INTERVAL_HOURS: ${UPLOAD_INTERVAL_HOURS:-6}
+      SNAPSHOT_RETENTION: ${SNAPSHOT_RETENTION:-200}
+      SAVE_LATEST_RAW: ${SAVE_LATEST_RAW:-true}
+      WEB_ENABLED: ${WEB_ENABLED:-true}
+      WEB_PORT: ${WEB_PORT:-8080}
+      DRY_RUN: ${DRY_RUN:-false}
+      RUN_ONCE: ${RUN_ONCE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
