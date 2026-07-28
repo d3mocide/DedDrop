@@ -28,7 +28,7 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────
 TAR1090_URL = os.environ.get("TAR1090_URL", "").strip()
 API_KEY = os.environ.get("WDGWARS_API_KEY", "").strip()
-MESHMAPPER_API_KEY = os.environ.get("MESHMAPPER_API_KEY", API_KEY).strip()
+MESHMAPPER_API_KEY = (os.environ.get("MESHMAPPER_API_KEY", "").strip() or API_KEY).strip()
 
 UPLOAD_URL = os.environ.get("WDGWARS_API_URL", "https://wdgwars.pl/endpoint/upload/").strip()
 ME_URL = os.environ.get("WDGWARS_ME_URL", "https://wdgwars.pl/api/me").strip()
@@ -45,6 +45,7 @@ LATEST_RAW_PATH = Path(os.environ.get("LATEST_RAW_PATH", "/data/latest_raw.json"
 WEB_ENABLED = os.environ.get("WEB_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).parent / "web"))
+PUBLIC_HOST = os.environ.get("PUBLIC_HOST", "").strip()
 
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
 CHUNK_COOLDOWN_S = float(os.environ.get("CHUNK_COOLDOWN_S", "1"))
@@ -529,10 +530,18 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 last_poll = _last_poll_time
                 last_up = dict(_last_upload_info)
 
-            elapsed_h = (time.time() - win_start) / 3600
-            host_header = self.headers.get("Host") or f"localhost:{WEB_PORT}"
-            meshmapper_url = f"https://{host_header}/api/wardrive" if "https" in host_header else f"http://{host_header}/api/wardrive"
-            app_link = f"meshmapper://custom-api?url={meshmapper_url}&key={MESHMAPPER_API_KEY}"
+            if PUBLIC_HOST:
+                if PUBLIC_HOST.startswith("http://") or PUBLIC_HOST.startswith("https://"):
+                    base_host = PUBLIC_HOST.rstrip("/")
+                else:
+                    base_host = f"http://{PUBLIC_HOST}"
+                meshmapper_url = f"{base_host}/api/wardrive"
+            else:
+                host_header = self.headers.get("Host") or f"localhost:{WEB_PORT}"
+                scheme = "https" if "https" in host_header else "http"
+                meshmapper_url = f"{scheme}://{host_header}/api/wardrive"
+            effective_key = MESHMAPPER_API_KEY or API_KEY or "YOUR_KEY"
+            app_link = f"meshmapper://custom-api?url={meshmapper_url}&key={effective_key}"
 
             self._send_json({
                 "ok": True,

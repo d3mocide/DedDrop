@@ -185,24 +185,77 @@
       transform: none !important;
     }
 
-    /* ── MeshMapper Quick Link Section ── */
-    .meshmapper-card {
-      background: rgba(139, 92, 246, 0.05);
-      border: 1px solid rgba(139, 92, 246, 0.3);
-      border-radius: 10px;
-      padding: 1.25rem;
-      margin-bottom: 1.75rem;
-      position: relative;
+    /* ── MeshMapper Quick Link Modal & Controls ── */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(4, 6, 10, 0.8);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease-in-out;
     }
 
-    .meshmapper-title {
-      font-size: 0.95rem;
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal-content {
+      background: #0b0f17;
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: 12px;
+      padding: 1.5rem;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(139, 92, 246, 0.15);
+      transform: scale(0.95);
+      transition: transform 0.2s ease-in-out;
+    }
+
+    .modal-overlay.active .modal-content {
+      transform: scale(1);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    .modal-title {
+      font-size: 1rem;
       font-weight: 700;
       color: var(--accent-purple);
-      margin-bottom: 0.5rem;
       display: flex;
       align-items: center;
       gap: 0.5rem;
+    }
+
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      transition: color 0.15s ease, background-color 0.15s ease;
+    }
+
+    .modal-close:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.1);
     }
 
     .link-copy-box {
@@ -607,6 +660,9 @@
           <div class="status-pulse" id="status-pulse"></div>
           <span id="status-text">Connecting...</span>
         </div>
+        <button class="btn" id="btn-meshmapper" style="color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.4);" onclick="openMeshMapperModal()">
+          📡 MeshMapper Link
+        </button>
         <button class="btn" id="btn-poll" onclick="triggerPoll()">
           ⚡ Poll Feed
         </button>
@@ -615,22 +671,6 @@
         </button>
       </div>
     </header>
-
-    <!-- MeshMapper Custom API Integration Helper Card -->
-    <div class="meshmapper-card">
-      <div class="meshmapper-title">
-        📡 MeshMapper Ingest Node (LoRa Wardrive Target)
-      </div>
-      <p style="font-size: 0.78rem; color: var(--text-muted);">
-        Copy deep link below → MeshMapper → Settings → API Endpoints → <strong>"Import from Clipboard"</strong>:
-      </p>
-      <div class="link-copy-box">
-        <input type="text" id="meshmapper-url-input" readonly value="meshmapper://custom-api?url=http://localhost:8080/api/wardrive&key=YOUR_KEY">
-        <button class="btn" style="color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.5);" onclick="copyMeshMapperLink()">
-          📋 Copy Link
-        </button>
-      </div>
-    </div>
 
     <!-- WDGWars Official Profile Banner Card -->
     <div class="wdgwars-profile-card">
@@ -806,6 +846,26 @@
       toast.style.display = 'block';
       setTimeout(() => { toast.style.display = 'none'; }, 3000);
     }
+
+    function openMeshMapperModal() {
+      const modal = document.getElementById('meshmapper-modal');
+      if (modal) modal.classList.add('active');
+    }
+
+    function closeMeshMapperModal(e) {
+      if (e && e.target && e.target !== document.getElementById('meshmapper-modal') && !e.target.classList.contains('modal-close')) {
+        return;
+      }
+      const modal = document.getElementById('meshmapper-modal');
+      if (modal) modal.classList.remove('active');
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('meshmapper-modal');
+        if (modal) modal.classList.remove('active');
+      }
+    });
 
     function copyMeshMapperLink() {
       const input = document.getElementById('meshmapper-url-input');
@@ -1056,5 +1116,27 @@
     refreshData();
     setInterval(refreshData, 5000);
   </script>
+  <!-- MeshMapper Custom API Integration Modal -->
+  <div class="modal-overlay" id="meshmapper-modal" onclick="closeMeshMapperModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title">
+          📡 MeshMapper Ingest Node (LoRa Wardrive Target)
+        </div>
+        <button class="modal-close" onclick="closeMeshMapperModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          Copy deep link below → MeshMapper → Settings → API Endpoints → <strong>"Import from Clipboard"</strong>:
+        </p>
+        <div class="link-copy-box">
+          <input type="text" id="meshmapper-url-input" readonly value="meshmapper://custom-api?url=http://localhost:8080/api/wardrive&key=YOUR_KEY">
+          <button class="btn" style="color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.5);" onclick="copyMeshMapperLink()">
+            📋 Copy Link
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
