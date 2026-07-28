@@ -7,6 +7,7 @@ without CORS, the token doubles as CSRF protection.
 """
 from __future__ import annotations
 
+import errno
 import gzip
 import hashlib
 import hmac
@@ -110,6 +111,32 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         # the format matches what MeshMapper already accepts.
         esc = lambda v: urllib.parse.quote(v, safe=":/")  # noqa: E731
         return f"meshmapper://custom-api?url={esc(base)}/api/wardrive&key={esc(key)}"
+
+    # ── OPTIONS ───────────────────────────────────────────────────────────
+    def do_OPTIONS(self):
+        """CORS preflight.
+
+        A cross-origin POST to /api/wardrive carries X-API-Key and a JSON
+        content type, so the browser preflights it. Without an answer here the
+        base handler replies 501 and the real request is never sent, which
+        looks exactly like CORS_ALLOW_ORIGIN having no effect.
+        """
+        if not config.CORS_ALLOW_ORIGIN:
+            self.send_response(405)
+            self.send_header("Allow", "GET, POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", config.CORS_ALLOW_ORIGIN)
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, X-API-Key, X-Control-Token")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     # ── GET ───────────────────────────────────────────────────────────────
     def do_GET(self):
@@ -361,6 +388,15 @@ def start_web_server():
     except OSError as e:
         log.error("could not bind web server to %s:%d (%s) — continuing headless",
                   config.WEB_BIND, config.WEB_PORT, e)
+        if e.errno == errno.EADDRNOTAVAIL:
+            # Nearly always WEB_BIND set to a LAN address of the *host* while
+            # DedDrop runs in a container, where that address does not exist.
+            log.error("WEB_BIND=%s is not an address on this machine. In Docker, "
+                      "leave WEB_BIND=0.0.0.0 and publish the port on the LAN "
+                      "address instead (WEB_PUBLISH_ADDR in .env).", config.WEB_BIND)
+        elif e.errno == errno.EADDRINUSE:
+            log.error("port %d is already in use — stop the other listener or set "
+                      "a different WEB_PORT.", config.WEB_PORT)
         return
 
     log.info("DedDrop dashboard & ingest API listening on http://%s:%d/",
