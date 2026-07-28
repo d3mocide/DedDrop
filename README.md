@@ -6,8 +6,9 @@
 
 - **ADS-B Aircraft Accumulator**: Polls `aircraft.json` from readsb/tar1090 (default: 30s), accumulates seen aircraft in memory, and flushes HMAC-signed batches to WDGWars (default: 6h).
 - **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper.
-- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal.
+- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. No external CDN or font requests — it works fully offline.
 - **State Persistence & Recovery**: Accumulator state persists to `/data/state/accumulator.json` across container restarts. Saved snapshots provide an audit trail.
+- **No Silent Data Loss**: A failed upload retains the accumulated window and retries it rather than discarding it.
 
 ## Quick Start
 
@@ -16,27 +17,77 @@
    cp .env.example .env
    ```
 2. Set your `WDGWARS_API_KEY` and `TAR1090_URL` in `.env`.
-3. Launch the service:
+3. Create the data directory with the right ownership (the container runs as uid 1000):
+   ```bash
+   mkdir -p ./data && sudo chown -R 1000:1000 ./data
+   ```
+4. Launch the service:
    ```bash
    docker compose up -d
    ```
-4. Access the Web Dashboard at `http://localhost:8080` (or your configured port/host).
+5. Access the Web Dashboard at `http://localhost:8080` (or your configured port/host).
 
 ## Environment Variables
+
+### Required
 
 | Variable | Default | Description |
 |---|---|---|
 | `TAR1090_URL` | *(required)* | Full URL to tar1090/readsb `aircraft.json` |
 | `WDGWARS_API_KEY` | *(required)* | WDGWars profile API key (64-hex string) |
+
+### Endpoints
+
+| Variable | Default | Description |
+|---|---|---|
+| `WDGWARS_API_URL` | `https://wdgwars.pl/endpoint/upload/` | Upload endpoint for signed batches |
+| `WDGWARS_ME_URL` | `https://wdgwars.pl/api/me` | Profile/stats endpoint used by the dashboard |
 | `MESHMAPPER_API_KEY` | `WDGWARS_API_KEY` | Optional separate API key for MeshMapper ingest |
-| `PUBLIC_HOST` | *(empty)* | Optional public host/IP for MeshMapper deep-link target (e.g. `192.168.1.100:8080`) |
-| `WEB_ENABLED` | `true` | Enable/disable the web dashboard |
-| `WEB_PORT` | `8080` | Port for the web dashboard |
+
+### Timing
+
+| Variable | Default | Description |
+|---|---|---|
 | `POLL_INTERVAL_SECONDS` | `30` | Interval between ADS-B feed polls |
 | `UPLOAD_INTERVAL_HOURS` | `6` | Interval between WDGWars batch uploads |
+| `RETRY_INTERVAL_MINUTES` | `15` | How soon a failed upload is retried |
+
+### Storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `STATE_FILE` | `/data/state/accumulator.json` | Persisted accumulator state |
+| `SNAPSHOT_DIR` | `/data/snapshots` | Directory for upload snapshots |
 | `SNAPSHOT_RETENTION` | `200` | Number of historical upload snapshots to retain |
-| `SAVE_LATEST_RAW` | `true` | Save raw feed dumps to `/data/latest_raw.json` |
+| `SAVE_LATEST_RAW` | `true` | Save raw feed dumps for debugging |
+| `LATEST_RAW_PATH` | `/data/latest_raw.json` | Where the raw dump is written |
+
+### Web dashboard & ingest
+
+| Variable | Default | Description |
+|---|---|---|
+| `WEB_ENABLED` | `true` | Enable/disable the web dashboard |
+| `WEB_BIND` | `0.0.0.0` | Bind address. Set `127.0.0.1` if MeshMapper doesn't need LAN access |
+| `WEB_PORT` | `8080` | Port for the web dashboard |
+| `WEB_DIR` | `<script dir>/web` | Directory containing `index.html` |
+| `PUBLIC_HOST` | *(empty)* | Public host/IP for the MeshMapper deep link (e.g. `192.168.1.100:8080`) |
+| `CORS_ALLOW_ORIGIN` | *(empty)* | Origin allowed to read the API cross-origin. Empty = same-origin only |
+| `MAX_BODY_BYTES` | `8388608` | Maximum accepted `/api/wardrive` request body |
+
+### Upload tuning
+
+| Variable | Default | Description |
+|---|---|---|
 | `BATCH_SIZE` | `500` | Records per upload batch chunk |
+| `CHUNK_COOLDOWN_S` | `1` | Pause between chunks |
+| `REQUEST_TIMEOUT_S` | `60` | HTTP timeout for outbound requests |
+| `MAX_ATTEMPTS` | `3` | Attempts per chunk before giving up |
+| `BACKOFF_BASE_S` | `2` | Base delay for exponential backoff |
+
+### Behaviour
+
+| Variable | Default | Description |
+|---|---|---|
 | `DRY_RUN` | `false` | Log upload batches without POSTing to WDGWars |
 | `RUN_ONCE` | `false` | Poll once, force immediate flush, then exit |
 | `LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
@@ -44,9 +95,36 @@
 ## MeshMapper Integration
 
 MeshMapper can push wardriving pings directly to DedDrop:
+
 - **Ingest Endpoint**: `POST /api/wardrive`
-- **Authentication**: `X-API-Key` header or `?key=` query parameter
-- **Quick Setup**: Click the **📡 MeshMapper Link** button on the web dashboard to copy the deep link (`meshmapper://custom-api?url=...`).
+- **Authentication**: `X-API-Key` header, or a `?key=` query parameter. Prefer the
+  header — query strings tend to end up in proxy and access logs.
+- **Quick Setup**: Click the **📡 MeshMapper Link** button on the dashboard to copy the
+  deep link (`meshmapper://custom-api?url=...`).
+
+## HTTP API
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/` | none | Dashboard |
+| `GET` | `/healthz` | none | Liveness probe |
+| `GET` | `/api/status` | none | Counters, window progress, last upload result |
+| `GET` | `/api/aircraft` | none | Accumulated aircraft in the current window |
+| `GET` | `/api/mesh-nodes` | none | Accumulated mesh nodes in the current window |
+| `GET` | `/api/snapshots` | none | Recent snapshot summaries |
+| `GET` | `/api/user-stats` | none | Cached WDGWars profile stats |
+| `GET` | `/api/meshmapper-link` | control | Deep link (contains the API key) |
+| `POST` | `/api/wardrive` | API key | MeshMapper ping ingest |
+| `POST` | `/api/trigger-poll` | control | Force an immediate feed poll |
+| `POST` | `/api/trigger-flush` | control | Force an immediate upload flush |
+
+**Control auth** means an `X-Control-Token` header or a valid API key. The control
+token is minted per process and embedded in the dashboard when it is served, so the
+UI buttons work with no login while cross-origin pages — which cannot read the
+dashboard HTML — cannot drive these endpoints.
+
+Cross-origin reads are disabled by default. The API exposes accumulated telemetry,
+so only set `CORS_ALLOW_ORIGIN` if you specifically need another origin to read it.
 
 ## Protocol & Data Flow
 
@@ -64,5 +142,39 @@ Content-Type: application/json
 }
 ```
 
-- **Fault Tolerance**: Automatic retry with exponential backoff on HTTP 429 / 5xx errors.
+- **Fault Tolerance**: Chunks are retried with exponential backoff on HTTP 429 and
+  5xx responses, honouring `Retry-After` when present. HTTP 413 is not retried —
+  lower `BATCH_SIZE` instead. If any chunk ultimately fails, the whole window is
+  retained and retried after `RETRY_INTERVAL_MINUTES`.
 - **Audit Trail**: Every upload saves an exact snapshot to `/data/snapshots/upload_<timestamp>.json`.
+- **Unknown telemetry is `null`**: an aircraft with no reported ground speed or track
+  sends `null` rather than `0`, so "not received" stays distinct from "zero".
+
+## Development
+
+No runtime or test dependencies beyond the Python 3.10+ stdlib.
+
+```bash
+python3 -m unittest discover -s tests -v   # run the test suite
+python3 -m pyflakes deddrop.py tests/      # lint (pip install pyflakes)
+```
+
+Both run in CI on every push, along with a Docker build and container smoke test.
+
+## Troubleshooting
+
+**`STATE_FILE directory ... is not writable` on startup.** The compose file bind-mounts
+`./data` into the container, which masks the image's ownership. Docker creates a missing
+`./data` owned by root, but DedDrop runs as uid 1000:
+
+```bash
+mkdir -p ./data && sudo chown -R 1000:1000 ./data
+```
+
+**Dashboard shows "Disconnected".** Check `docker compose logs deddrop`. If the web
+server could not bind its port, DedDrop logs the error and continues headless — polling
+and uploading still work.
+
+**`poll rejected all N aircraft in the feed`.** `TAR1090_URL` is reachable but isn't
+returning tar1090-shaped JSON, or the receiver has no position data. Confirm the URL
+ends in `/data/aircraft.json`.

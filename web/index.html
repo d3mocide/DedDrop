@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DedDrop — Telemetry Dead Drop</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- No external font CDN: a passive dead drop shouldn't beacon to
+       fonts.googleapis.com on every dashboard load, and these boxes are often
+       offline. System stacks below render everywhere with no network. -->
   <style>
     :root {
       --bg-dark: #04060a;
@@ -29,8 +29,10 @@
       --text-dim: #64748b;
       
       --glass-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
-      --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      --font-mono: 'JetBrains Mono', monospace;
+      --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono',
+                   Menlo, Consolas, 'DejaVu Sans Mono', monospace;
     }
 
     * {
@@ -651,7 +653,7 @@
         </div>
         <div>
           <h1>DedDrop - WDGWars Telemetry Uploader</h1>
-          <p id="tool-info">v1.2.0 — Signal Telemetry Terminal</p>
+          <p id="tool-info">v1.3.0 — Signal Telemetry Terminal</p>
         </div>
       </div>
 
@@ -753,6 +755,7 @@
             <span id="ingested-pings-label" style="color: var(--accent-purple);">0</span>
           </div>
         </div>
+        <div id="retry-notice" style="display: none; margin-top: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); color: var(--accent-amber); font-size: 0.78rem;"></div>
       </div>
 
       <!-- Last Upload Result Card -->
@@ -829,15 +832,45 @@
   <div id="toast" class="toast">Action triggered</div>
 
   <script>
+    // Injected by the server when it serves this page. Control endpoints require
+    // it, and a cross-origin page cannot read this HTML, so it also blocks CSRF.
+    const CONTROL_TOKEN = '__CONTROL_TOKEN__';
+
     let currentTab = 'aircraft';
     let allAircraft = [];
     let allMeshNodes = [];
     let sortCol = 'first_seen';
     let sortAsc = false;
+    let lastRenderKey = '';
+
+    // Every value below reaches innerHTML, and callsigns come off the ADS-B feed
+    // while node ids come from whoever can POST /api/wardrive. Neither is trusted.
+    function esc(v) {
+      if (v === undefined || v === null) return '';
+      return String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     function fmtNum(n) {
       if (n === undefined || n === null) return '0';
       return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    }
+
+    // Missing telemetry is now null rather than a fabricated 0, so render it
+    // as unknown instead of implying the aircraft is stationary or heading north.
+    function fmtOpt(v, suffix) {
+      if (v === undefined || v === null) return '<span style="color: var(--text-dim);">--</span>';
+      return esc(fmtNum(v)) + (suffix || '');
+    }
+
+    function controlFetch(url, options) {
+      const opts = Object.assign({}, options);
+      opts.headers = Object.assign({ 'X-Control-Token': CONTROL_TOKEN }, opts.headers || {});
+      return fetch(url, opts);
     }
 
     function showToast(msg) {
@@ -847,9 +880,20 @@
       setTimeout(() => { toast.style.display = 'none'; }, 3000);
     }
 
-    function openMeshMapperModal() {
+    // The deep link embeds the ingest key, so it lives behind an authenticated
+    // endpoint now rather than riding along in every /api/status response.
+    async function openMeshMapperModal() {
       const modal = document.getElementById('meshmapper-modal');
       if (modal) modal.classList.add('active');
+      const input = document.getElementById('meshmapper-url-input');
+      try {
+        const res = await controlFetch('/api/meshmapper-link');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (data.meshmapper_link) input.value = data.meshmapper_link;
+      } catch (err) {
+        input.value = 'Could not load link — check the DedDrop logs.';
+      }
     }
 
     function closeMeshMapperModal(e) {
@@ -870,8 +914,18 @@
     function copyMeshMapperLink() {
       const input = document.getElementById('meshmapper-url-input');
       input.select();
-      navigator.clipboard.writeText(input.value);
-      showToast('MeshMapper deep link copied to clipboard!');
+      // clipboard API is unavailable on plain-http origins other than localhost,
+      // which is exactly how this dashboard is usually reached over a LAN.
+      const done = () => showToast('MeshMapper deep link copied to clipboard!');
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(done, () => {
+          showToast('Copy failed — select the text and copy manually.');
+        });
+      } else if (document.execCommand('copy')) {
+        done();
+      } else {
+        showToast('Copy failed — select the text and copy manually.');
+      }
     }
 
     async function fetchStatus() {
@@ -893,16 +947,21 @@
         document.getElementById('ingested-pings-label').innerText = fmtNum(data.ingested_pings_count || 0);
         document.getElementById('poll-count-badge').innerText = (data.poll_count || 0) + ' Polls';
 
-        if (data.meshmapper_link) {
-          document.getElementById('meshmapper-url-input').value = data.meshmapper_link;
-        }
-
         // Window progress
         const elapsedH = data.elapsed_hours || 0;
         const totalH = data.upload_interval_hours || 6;
         const pct = Math.min(100, (elapsedH / totalH) * 100);
         document.getElementById('window-progress').style.width = pct.toFixed(1) + '%';
         document.getElementById('window-timer').innerText = `${elapsedH.toFixed(2)}h / ${totalH}h (${pct.toFixed(0)}%)`;
+
+        // Surface a retained window so a failing upload is visible, not silent.
+        const retryEl = document.getElementById('retry-notice');
+        if (data.retry_pending_in > 0) {
+          retryEl.style.display = '';
+          retryEl.innerText = `⚠ Last dispatch failed — window retained, retrying in ${Math.ceil(data.retry_pending_in / 60)} min`;
+        } else {
+          retryEl.style.display = 'none';
+        }
 
         // Last Upload Result
         if (data.last_upload) {
@@ -959,10 +1018,10 @@
         }
         list.innerHTML = files.map(f => `
           <div class="history-item">
-            <span>💀 ${f.name}</span>
-            <span style="color: var(--accent-cyan);">${fmtNum(f.aircraft_count || 0)} aircraft</span>
-            <span style="color: var(--accent-purple);">${fmtNum(f.mesh_nodes_count || 0)} mesh</span>
-            <span style="color: var(--text-dim);">${(f.size / 1024).toFixed(1)} KB</span>
+            <span>💀 ${esc(f.name)}</span>
+            <span style="color: var(--accent-cyan);">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
+            <span style="color: var(--accent-purple);">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
+            <span style="color: var(--text-dim);">${((f.size || 0) / 1024).toFixed(1)} KB</span>
           </div>
         `).join('');
       } catch (err) {}
@@ -989,10 +1048,24 @@
       renderActiveTable();
     }
 
-    function renderActiveTable() {
+    function renderActiveTable(force) {
       const query = document.getElementById('search-input').value.toUpperCase();
       const head = document.getElementById('table-head');
       const tbody = document.getElementById('table-body');
+      const wrapper = document.querySelector('.table-wrapper');
+
+      // Rebuilding identical rows every 5s threw away scroll position and any
+      // in-progress text selection. Skip the write when nothing changed.
+      const key = [currentTab, query, sortCol, sortAsc,
+                   allAircraft.length, allMeshNodes.length,
+                   currentTab === 'aircraft'
+                     ? allAircraft.map(a => a.icao + a.first_seen).join()
+                     : allMeshNodes.map(m => m.node_id + m.first_seen).join()
+                  ].join('|');
+      if (!force && key === lastRenderKey) return;
+      lastRenderKey = key;
+      const scrollTop = wrapper ? wrapper.scrollTop : 0;
+      const restore = () => { if (wrapper) wrapper.scrollTop = scrollTop; };
 
       if (currentTab === 'aircraft') {
         head.innerHTML = `
@@ -1018,19 +1091,21 @@
 
         if (filtered.length === 0) {
           tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${allAircraft.length === 0 ? 'No aircraft signals in window.' : 'No matching aircraft signals.'}</td></tr>`;
+          restore();
           return;
         }
 
         tbody.innerHTML = filtered.map(a => `
           <tr>
-            <td><span class="icao-badge">${a.icao}</span></td>
-            <td>${a.callsign ? a.callsign : '<span style="color: var(--text-dim);">--</span>'}</td>
-            <td>${a.alt_ft ? fmtNum(a.alt_ft) : '0'}</td>
-            <td>${a.speed_kt ? a.speed_kt : '0'}</td>
-            <td>${a.heading !== undefined ? a.heading + '°' : '0°'}</td>
-            <td>${a.first_seen || '--'}</td>
+            <td><span class="icao-badge">${esc(a.icao)}</span></td>
+            <td>${a.callsign ? esc(a.callsign) : '<span style="color: var(--text-dim);">--</span>'}</td>
+            <td>${fmtOpt(a.alt_ft)}</td>
+            <td>${fmtOpt(a.speed_kt)}</td>
+            <td>${fmtOpt(a.heading, '°')}</td>
+            <td>${esc(a.first_seen) || '--'}</td>
           </tr>
         `).join('');
+        restore();
 
       } else {
         head.innerHTML = `
@@ -1056,19 +1131,21 @@
 
         if (filtered.length === 0) {
           tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${allMeshNodes.length === 0 ? 'No mesh nodes ingested in current window.' : 'No matching mesh nodes.'}</td></tr>`;
+          restore();
           return;
         }
 
         tbody.innerHTML = filtered.map(m => `
           <tr>
-            <td><span class="mesh-badge">${m.node_id}</span></td>
-            <td style="color: var(--accent-purple); font-weight: 600;">${m.node_type || 'REPEATER'}</td>
-            <td>${m.lat ? m.lat.toFixed(5) : '0'}</td>
-            <td>${m.lon ? m.lon.toFixed(5) : '0'}</td>
-            <td>${m.rssi !== null && m.rssi !== undefined ? m.rssi + ' dBm' : '<span style="color: var(--text-dim);">null</span>'}</td>
-            <td>${m.first_seen || '--'}</td>
+            <td><span class="mesh-badge">${esc(m.node_id)}</span></td>
+            <td style="color: var(--accent-purple); font-weight: 600;">${esc(m.node_type || 'REPEATER')}</td>
+            <td>${typeof m.lat === 'number' ? m.lat.toFixed(5) : '--'}</td>
+            <td>${typeof m.lon === 'number' ? m.lon.toFixed(5) : '--'}</td>
+            <td>${m.rssi !== null && m.rssi !== undefined ? esc(m.rssi) + ' dBm' : '<span style="color: var(--text-dim);">--</span>'}</td>
+            <td>${esc(m.first_seen) || '--'}</td>
           </tr>
         `).join('');
+        restore();
       }
     }
 
@@ -1080,9 +1157,10 @@
       const btn = document.getElementById('btn-poll');
       btn.disabled = true;
       try {
-        const res = await fetch('/api/trigger-poll', { method: 'POST' });
+        const res = await controlFetch('/api/trigger-poll', { method: 'POST' });
         const data = await res.json();
-        showToast(data.message || 'Poll triggered!');
+        showToast(res.ok ? (data.message || 'Poll triggered!')
+                         : (data.error || 'Poll rejected'));
         setTimeout(refreshData, 1000);
       } catch (err) {
         showToast('Error triggering poll');
@@ -1095,9 +1173,10 @@
       const btn = document.getElementById('btn-flush');
       btn.disabled = true;
       try {
-        const res = await fetch('/api/trigger-flush', { method: 'POST' });
+        const res = await controlFetch('/api/trigger-flush', { method: 'POST' });
         const data = await res.json();
-        showToast(data.message || 'Flush & Dispatch triggered!');
+        showToast(res.ok ? (data.message || 'Flush & Dispatch triggered!')
+                         : (data.error || 'Flush rejected'));
         setTimeout(refreshData, 1500);
       } catch (err) {
         showToast('Error triggering flush');
@@ -1108,13 +1187,18 @@
 
     function refreshData() {
       fetchStatus();
-      fetchUserStats();
       fetchTablesData();
-      fetchSnapshots();
     }
 
+    // Split by how fast each thing actually changes. Snapshots roll over once
+    // per upload window and remote user stats are server-cached for 60s, so
+    // polling both every 5s was pure overhead.
     refreshData();
+    fetchUserStats();
+    fetchSnapshots();
     setInterval(refreshData, 5000);
+    setInterval(fetchUserStats, 60000);
+    setInterval(fetchSnapshots, 30000);
   </script>
   <!-- MeshMapper Custom API Integration Modal -->
   <div class="modal-overlay" id="meshmapper-modal" onclick="closeMeshMapperModal(event)">
