@@ -8,17 +8,36 @@ without CORS, the token doubles as CSRF protection.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import hmac
 import json
+import posixpath
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from . import config, runtime, storage
 from .config import log
 from .normalize import normalize_mesh_ping, merge_mesh_records
 
 _GZIP_MIN_BYTES = 1024
+
+# Only these extensions are ever served from WEB_DIR.
+_STATIC_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+}
+
+# No inline scripts or styles remain in the dashboard, so this can be strict:
+# an injected <script> or onerror= handler simply will not execute.
+_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'")
 
 
 class WebRequestHandler(BaseHTTPRequestHandler):
@@ -32,11 +51,12 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
     # ── Responses ─────────────────────────────────────────────────────────
     def _send_bytes(self, body: bytes, content_type: str, status: int = 200,
-                    *, no_store: bool = False):
+                    *, no_store: bool = False, extra_headers: list | None = None):
         headers = [("Content-Type", content_type)]
         if len(body) > _GZIP_MIN_BYTES and "gzip" in (self.headers.get("Accept-Encoding") or ""):
             body = gzip.compress(body, compresslevel=6)
             headers.append(("Content-Encoding", "gzip"))
+        headers.extend(extra_headers or [])
 
         self.send_response(status)
         for name, value in headers:
@@ -105,10 +125,12 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             "/api/user-stats": self._get_user_stats,
             "/api/meshmapper-link": self._get_meshmapper_link,
         }.get(path)
-        if handler is None:
-            self.send_error(404, "Not Found")
+        if handler is not None:
+            handler()
             return
-        handler()
+        # Anything else may be a dashboard asset (/app.css, /js/main.js, ...).
+        if not self._get_static(path):
+            self.send_error(404, "Not Found")
 
     def _get_index(self):
         try:
@@ -120,8 +142,72 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 b"<p>Expected <code>web/index.html</code>.</p>",
                 "text/html; charset=utf-8", status=500)
             return
+        # The page carries a per-process token, so it must never be cached.
         content = content.replace("__CONTROL_TOKEN__", config.CONTROL_TOKEN)
-        self._send_bytes(content.encode("utf-8"), "text/html; charset=utf-8", no_store=True)
+        self._send_bytes(content.encode("utf-8"), "text/html; charset=utf-8",
+                         no_store=True, extra_headers=[("Content-Security-Policy", _CSP)])
+
+    def _resolve_static(self, url_path: str) -> Path | None:
+        """Map a URL path to a file inside WEB_DIR, or None if it isn't allowed.
+
+        Rejects anything that escapes WEB_DIR, is a symlink out of it, or has an
+        extension that isn't explicitly served.
+        """
+        # normpath collapses ".." before it can be used, and a leading "/" keeps
+        # the result anchored so "../" cannot climb past the root.
+        clean = posixpath.normpath("/" + urllib.parse.unquote(url_path)).lstrip("/")
+        if not clean or clean == ".":
+            return None
+        # A NUL or control character can smuggle an allowed-looking extension
+        # past the check below, and reaches the filesystem call as a ValueError.
+        if any(ch < " " or ch == "\x7f" for ch in clean):
+            return None
+
+        candidate = config.WEB_DIR / clean
+        if candidate.suffix.lower() not in _STATIC_TYPES:
+            return None
+        try:
+            # strict=True resolves symlinks, so a link pointing outside WEB_DIR
+            # fails the containment check below rather than being followed.
+            resolved = candidate.resolve(strict=True)
+            root = config.WEB_DIR.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if not resolved.is_file() or not resolved.is_relative_to(root):
+            log.warning("refused static path outside WEB_DIR: %s", url_path)
+            return None
+        return resolved
+
+    def _get_static(self, url_path: str) -> bool:
+        path = self._resolve_static(url_path)
+        if path is None:
+            return False
+        try:
+            body = path.read_bytes()
+            stat = path.stat()
+        except OSError:
+            return False
+
+        # Weak validator over content: assets change only on redeploy, so a
+        # conditional request is almost always a 304.
+        etag = f'W/"{hashlib.sha256(body).hexdigest()[:16]}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return True
+
+        self._send_bytes(
+            body, _STATIC_TYPES[path.suffix.lower()],
+            extra_headers=[
+                ("ETag", etag),
+                # "no-cache" means revalidate, not "don't store" — the browser
+                # keeps the bytes and we answer with a 304.
+                ("Cache-Control", "no-cache"),
+                ("Content-Security-Policy", _CSP),
+            ])
+        return True
 
     def _get_healthz(self):
         self._send_json({"ok": True, "version": config.TOOL_VERSION}, no_store=True)

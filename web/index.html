@@ -4,646 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DedDrop — Telemetry Dead Drop</title>
-  <!-- No external font CDN: a passive dead drop shouldn't beacon to
-       fonts.googleapis.com on every dashboard load, and these boxes are often
-       offline. System stacks below render everywhere with no network. -->
-  <style>
-    :root {
-      --bg-dark: #04060a;
-      --bg-card: rgba(11, 15, 23, 0.9);
-      --bg-wdg-card: #080c14;
-      --border-color: rgba(255, 255, 255, 0.08);
-      --border-gothic: rgba(225, 29, 72, 0.25);
-      --border-highlight: rgba(168, 85, 247, 0.35);
-      
-      --accent-crimson: #f43f5e;
-      --accent-rose: #e11d48;
-      --accent-purple: #a855f7;
-      --accent-violet: #8b5cf6;
-      --accent-cyan: #38bdf8;
-      --accent-emerald: #10b981;
-      --accent-amber: #f59e0b;
-      
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      
-      --glass-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
-      --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-                   'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono',
-                   Menlo, Consolas, 'DejaVu Sans Mono', monospace;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      background-color: var(--bg-dark);
-      background-image: 
-        radial-gradient(circle at 15% 10%, rgba(225, 29, 72, 0.08) 0px, transparent 45%),
-        radial-gradient(circle at 85% 90%, rgba(139, 92, 246, 0.08) 0px, transparent 45%),
-        radial-gradient(circle at 50% 50%, rgba(5, 8, 15, 0.9) 0%, #04060a 100%);
-      color: var(--text-main);
-      font-family: var(--font-main);
-      min-height: 100vh;
-      padding: 2rem 1.5rem;
-      line-height: 1.5;
-    }
-
-    .container {
-      max-width: 1280px;
-      margin: 0 auto;
-    }
-
-    /* Header */
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 2rem;
-      padding-bottom: 1.25rem;
-      border-bottom: 1px solid var(--border-gothic);
-      flex-wrap: wrap;
-      gap: 1rem;
-      position: relative;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-
-    .skull-badge {
-      width: 44px;
-      height: 44px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, rgba(225, 29, 72, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
-      border: 1.5px solid var(--accent-crimson);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 0 20px rgba(225, 29, 72, 0.3);
-      position: relative;
-    }
-
-    .skull-badge svg {
-      filter: drop-shadow(0 0 6px var(--accent-crimson));
-    }
-
-    .brand h1 {
-      font-family: var(--font-main);
-      font-size: 1.5rem;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 50%, var(--accent-crimson) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .brand p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.4rem 0.85rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      font-family: var(--font-mono);
-      background: rgba(16, 185, 129, 0.1);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      color: var(--accent-emerald);
-    }
-
-    .status-pulse {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background-color: var(--accent-emerald);
-      box-shadow: 0 0 10px var(--accent-emerald);
-      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: .4; transform: scale(1.2); }
-    }
-
-    .btn {
-      background: rgba(15, 23, 42, 0.9);
-      color: var(--text-main);
-      border: 1px solid var(--border-color);
-      padding: 0.5rem 1rem;
-      border-radius: 6px;
-      font-size: 0.82rem;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      transition: all 0.2s ease;
-      font-family: var(--font-main);
-    }
-
-    .btn:hover {
-      background: rgba(30, 41, 59, 0.9);
-      border-color: var(--accent-purple);
-      transform: translateY(-1px);
-      box-shadow: 0 0 12px rgba(168, 85, 247, 0.2);
-    }
-
-    .btn-gothic {
-      background: linear-gradient(135deg, rgba(225, 29, 72, 0.25) 0%, rgba(139, 92, 246, 0.25) 100%);
-      border-color: rgba(225, 29, 72, 0.5);
-      color: #ffffff;
-      box-shadow: 0 0 15px rgba(225, 29, 72, 0.2);
-    }
-
-    .btn-gothic:hover {
-      background: linear-gradient(135deg, rgba(225, 29, 72, 0.4) 0%, rgba(139, 92, 246, 0.4) 100%);
-      border-color: var(--accent-crimson);
-      box-shadow: 0 0 20px rgba(225, 29, 72, 0.4);
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none !important;
-    }
-
-    /* ── MeshMapper Quick Link Modal & Controls ── */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background: rgba(4, 6, 10, 0.8);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s ease-in-out;
-    }
-
-    .modal-overlay.active {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .modal-content {
-      background: #0b0f17;
-      border: 1px solid rgba(139, 92, 246, 0.4);
-      border-radius: 12px;
-      padding: 1.5rem;
-      max-width: 600px;
-      width: 90%;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(139, 92, 246, 0.15);
-      transform: scale(0.95);
-      transition: transform 0.2s ease-in-out;
-    }
-
-    .modal-overlay.active .modal-content {
-      transform: scale(1);
-    }
-
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-
-    .modal-title {
-      font-size: 1rem;
-      font-weight: 700;
-      color: var(--accent-purple);
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .modal-close {
-      background: transparent;
-      border: none;
-      color: var(--text-muted);
-      font-size: 1.5rem;
-      line-height: 1;
-      cursor: pointer;
-      padding: 0.2rem 0.5rem;
-      border-radius: 4px;
-      transition: color 0.15s ease, background-color 0.15s ease;
-    }
-
-    .modal-close:hover {
-      color: var(--text-main);
-      background: rgba(255, 255, 255, 0.1);
-    }
-
-    .link-copy-box {
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 0.5rem;
-    }
-
-    .link-copy-box input {
-      flex: 1;
-      background: rgba(4, 6, 10, 0.8);
-      border: 1px solid rgba(139, 92, 246, 0.3);
-      border-radius: 6px;
-      padding: 0.5rem 0.75rem;
-      color: var(--accent-purple);
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      outline: none;
-    }
-
-    /* ── WDGWars Official Profile Banner Styling ── */
-    .wdgwars-profile-card {
-      background: var(--bg-wdg-card);
-      border: 1px solid var(--border-gothic);
-      border-radius: 12px;
-      padding: 1.5rem;
-      margin-bottom: 1.75rem;
-      box-shadow: var(--glass-shadow);
-      position: relative;
-    }
-
-    .wdg-header {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 1.25rem;
-    }
-
-    .wdg-logo-icon {
-      width: 26px;
-      height: 26px;
-      background: linear-gradient(135deg, var(--accent-rose), var(--accent-purple));
-      border-radius: 4px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.85rem;
-      font-weight: 800;
-      color: white;
-      box-shadow: 0 0 10px rgba(225, 29, 72, 0.4);
-    }
-
-    .wdg-username {
-      font-size: 1.45rem;
-      font-weight: 700;
-      color: #ffffff;
-      font-family: var(--font-mono);
-      letter-spacing: -0.01em;
-    }
-
-    .wdg-stat-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-      gap: 0.75rem;
-      margin-bottom: 1.25rem;
-    }
-
-    .wdg-mini-card {
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 8px;
-      padding: 1rem 0.75rem;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      transition: all 0.2s ease;
-    }
-
-    .wdg-mini-card:hover {
-      border-color: var(--border-gothic);
-      background: rgba(225, 29, 72, 0.05);
-    }
-
-    .wdg-mini-val {
-      font-size: 1.5rem;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      color: #ffffff;
-      line-height: 1.2;
-    }
-
-    .wdg-mini-label {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      margin-top: 0.35rem;
-      display: flex;
-      align-items: center;
-      gap: 0.3rem;
-      font-weight: 500;
-    }
-
-    /* Grid Layout */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.25rem;
-      margin-bottom: 1.75rem;
-    }
-
-    /* Cards */
-    .card {
-      background: var(--bg-card);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      padding: 1.25rem;
-      box-shadow: var(--glass-shadow);
-      transition: all 0.3s ease;
-    }
-
-    .card:hover {
-      border-color: var(--border-gothic);
-    }
-
-    .card-title {
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--text-muted);
-      margin-bottom: 0.75rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .stat-hero {
-      display: flex;
-      align-items: baseline;
-      gap: 0.5rem;
-    }
-
-    .stat-number {
-      font-size: 2.2rem;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      letter-spacing: -0.03em;
-      color: var(--text-main);
-    }
-
-    .stat-unit {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-
-    .stat-meta {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-top: 0.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-
-    .stat-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0.3rem 0;
-      border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
-    }
-
-    .stat-row:last-child {
-      border-bottom: none;
-    }
-
-    /* Progress bar */
-    .progress-bar-bg {
-      width: 100%;
-      height: 6px;
-      background: rgba(255, 255, 255, 0.06);
-      border-radius: 9999px;
-      overflow: hidden;
-      margin-top: 0.75rem;
-      border: 1px solid rgba(225, 29, 72, 0.15);
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent-crimson), var(--accent-purple));
-      border-radius: 9999px;
-      transition: width 0.4s ease;
-      box-shadow: 0 0 10px var(--accent-crimson);
-    }
-
-    /* Table Tabs Section */
-    .table-card {
-      margin-bottom: 2rem;
-    }
-
-    .tab-bar {
-      display: flex;
-      gap: 0.5rem;
-      border-bottom: 1px solid var(--border-color);
-      margin-bottom: 1rem;
-    }
-
-    .tab-btn {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      font-size: 0.85rem;
-      font-weight: 600;
-      padding: 0.6rem 1rem;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-      font-family: var(--font-main);
-    }
-
-    .tab-btn.active {
-      color: var(--accent-crimson);
-      border-bottom-color: var(--accent-crimson);
-    }
-
-    .tab-btn:hover:not(.active) {
-      color: var(--text-main);
-    }
-
-    .table-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-
-    .search-box {
-      position: relative;
-      min-width: 240px;
-    }
-
-    .search-box input {
-      width: 100%;
-      background: rgba(4, 6, 10, 0.8);
-      border: 1px solid var(--border-color);
-      border-radius: 6px;
-      padding: 0.45rem 0.8rem 0.45rem 2.2rem;
-      color: var(--text-main);
-      font-size: 0.85rem;
-      outline: none;
-      transition: all 0.2s;
-    }
-
-    .search-box input:focus {
-      border-color: var(--accent-crimson);
-      box-shadow: 0 0 10px rgba(225, 29, 72, 0.2);
-    }
-
-    .search-icon {
-      position: absolute;
-      left: 0.75rem;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-muted);
-      pointer-events: none;
-      font-size: 0.8rem;
-    }
-
-    .table-wrapper {
-      overflow-x: auto;
-      border-radius: 8px;
-      border: 1px solid var(--border-color);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      text-align: left;
-      font-size: 0.85rem;
-    }
-
-    th {
-      background: rgba(8, 12, 20, 0.9);
-      color: var(--text-muted);
-      font-weight: 600;
-      font-size: 0.75rem;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid var(--border-color);
-      cursor: pointer;
-      user-select: none;
-    }
-
-    th:hover {
-      color: var(--accent-crimson);
-    }
-
-    td {
-      padding: 0.65rem 1rem;
-      border-bottom: 1px solid var(--border-color);
-      color: var(--text-main);
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-    }
-
-    tr:hover td {
-      background: rgba(225, 29, 72, 0.03);
-    }
-
-    .icao-badge {
-      background: rgba(56, 189, 248, 0.1);
-      color: var(--accent-cyan);
-      padding: 0.15rem 0.45rem;
-      border-radius: 4px;
-      border: 1px solid rgba(56, 189, 248, 0.25);
-      font-weight: 600;
-    }
-
-    .mesh-badge {
-      background: rgba(168, 85, 247, 0.1);
-      color: var(--accent-purple);
-      padding: 0.15rem 0.45rem;
-      border-radius: 4px;
-      border: 1px solid rgba(168, 85, 247, 0.3);
-      font-weight: 600;
-    }
-
-    .empty-state {
-      padding: 2.5rem 1rem;
-      text-align: center;
-      color: var(--text-muted);
-    }
-
-    /* History & Log */
-    .history-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      max-height: 240px;
-      overflow-y: auto;
-    }
-
-    .history-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0.5rem 0.75rem;
-      background: rgba(4, 6, 10, 0.6);
-      border-radius: 6px;
-      font-size: 0.78rem;
-      font-family: var(--font-mono);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-    }
-
-    .toast {
-      position: fixed;
-      bottom: 1.5rem;
-      right: 1.5rem;
-      background: rgba(11, 15, 23, 0.95);
-      border: 1px solid var(--accent-crimson);
-      color: var(--text-main);
-      padding: 0.75rem 1.25rem;
-      border-radius: 8px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
-      font-size: 0.85rem;
-      display: none;
-      z-index: 1000;
-      animation: slideIn 0.3s ease;
-    }
-
-    @keyframes slideIn {
-      from { transform: translateY(20px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-  </style>
+  <!-- Replaced by the server when this page is served. Read by js/api.js;
+       a meta tag rather than an inline script so a strict CSP still applies. -->
+  <meta name="deddrop-control-token" content="__CONTROL_TOKEN__">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/js/main.js"></script>
 </head>
 <body>
   <div class="container">
     <header>
       <div class="brand">
         <div class="skull-badge">
-          <!-- Stylized Skull Icon -->
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M12 2C7.03 2 3 6.03 3 11c0 2.8 1.28 5.3 3.3 6.96V20a1 1 0 0 0 1 1h2.5v-2h1v2h2v-2h1v2H16.7a1 1 0 0 0 1-1v-2.04C19.72 16.3 21 13.8 21 11c0-4.97-4.03-9-9-9z"/>
             <circle cx="8.5" cy="11.5" r="1.5" fill="currentColor"/>
@@ -662,19 +33,13 @@
           <div class="status-pulse" id="status-pulse"></div>
           <span id="status-text">Connecting...</span>
         </div>
-        <button class="btn" id="btn-meshmapper" style="color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.4);" onclick="openMeshMapperModal()">
-          📡 MeshMapper Link
-        </button>
-        <button class="btn" id="btn-poll" onclick="triggerPoll()">
-          ⚡ Poll Feed
-        </button>
-        <button class="btn btn-gothic" id="btn-flush" onclick="triggerFlush()">
-          💀 Flush & Dispatch
-        </button>
+        <button class="btn btn-mesh" id="btn-meshmapper">📡 MeshMapper Link</button>
+        <button class="btn" id="btn-poll">⚡ Poll Feed</button>
+        <button class="btn btn-gothic" id="btn-flush">💀 Flush &amp; Dispatch</button>
       </div>
     </header>
 
-    <!-- WDGWars Official Profile Banner Card -->
+    <!-- WDGWars profile banner -->
     <div class="wdgwars-profile-card">
       <div class="wdg-header">
         <div class="wdg-logo-icon">☠</div>
@@ -701,21 +66,21 @@
           </div>
         </div>
         <div class="wdg-mini-card">
-          <div class="wdg-mini-val" id="wdg-adsb" style="color: var(--accent-cyan);">0</div>
+          <div class="wdg-mini-val accent-cyan" id="wdg-adsb">0</div>
           <div class="wdg-mini-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.7 5.2c.3.4.8.5 1.3.3l.5-.3c.4-.2.6-.6.5-1.1z"/></svg>
             ADS-B
           </div>
         </div>
         <div class="wdg-mini-card">
-          <div class="wdg-mini-val" id="wdg-mesh" style="color: var(--accent-purple);">0</div>
+          <div class="wdg-mini-val accent-purple" id="wdg-mesh">0</div>
           <div class="wdg-mini-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M3 12h3m12 0h3M12 3v3m0 12v3"/></svg>
             Mesh
           </div>
         </div>
         <div class="wdg-mini-card">
-          <div class="wdg-mini-val" id="wdg-flock" style="color: var(--accent-rose);">0</div>
+          <div class="wdg-mini-val accent-rose" id="wdg-flock">0</div>
           <div class="wdg-mini-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
             Flock
@@ -724,54 +89,52 @@
       </div>
     </div>
 
-    <!-- System Uploader Grid Cards -->
+    <!-- Uploader status cards -->
     <div class="grid">
-      <!-- Accumulator Card -->
       <div class="card">
         <div class="card-title">
           <span>Current Upload Window</span>
-          <span id="poll-count-badge" style="color: var(--accent-crimson);">0 Polls</span>
+          <span id="poll-count-badge" class="accent-crimson">0 Polls</span>
         </div>
-        <div style="display: flex; gap: 1.5rem; align-items: baseline; margin-bottom: 0.5rem;">
+        <div class="stat-hero-row">
           <div>
-            <span class="stat-number" id="acc-count" style="color: var(--accent-cyan);">0</span>
+            <span class="stat-number accent-cyan" id="acc-count">0</span>
             <span class="stat-unit">aircraft</span>
           </div>
           <div>
-            <span class="stat-number" id="mesh-acc-count" style="color: var(--accent-purple);">0</span>
+            <span class="stat-number accent-purple" id="mesh-acc-count">0</span>
             <span class="stat-unit">mesh nodes</span>
           </div>
         </div>
         <div class="progress-bar-bg">
           <div class="progress-bar-fill" id="window-progress"></div>
         </div>
-        <div class="stat-meta" style="margin-top: 0.75rem;">
+        <div class="stat-meta stat-meta-spaced">
           <div class="stat-row">
             <span>Dispatch Timer</span>
             <strong id="window-timer">0h 0m / 6h</strong>
           </div>
           <div class="stat-row">
             <span>Ingested LoRa Pings</span>
-            <span id="ingested-pings-label" style="color: var(--accent-purple);">0</span>
+            <span id="ingested-pings-label" class="accent-purple">0</span>
           </div>
         </div>
-        <div id="retry-notice" style="display: none; margin-top: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); color: var(--accent-amber); font-size: 0.78rem;"></div>
+        <div id="retry-notice" class="retry-notice"></div>
       </div>
 
-      <!-- Last Upload Result Card -->
       <div class="card">
         <div class="card-title">
           <span>Last Dispatch Result</span>
-          <span id="dry-run-badge" style="font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; background: rgba(245, 158, 11, 0.15); color: var(--accent-amber);">LIVE</span>
+          <span id="dry-run-badge" class="badge-live">LIVE</span>
         </div>
         <div class="stat-meta">
           <div class="stat-row">
             <span>Aircraft Dispatched / New</span>
-            <strong style="color: var(--accent-cyan);" id="last-ac-info">-- / --</strong>
+            <strong class="accent-cyan" id="last-ac-info">-- / --</strong>
           </div>
           <div class="stat-row">
             <span>Mesh Nodes Dispatched / New</span>
-            <strong style="color: var(--accent-purple);" id="last-mesh-info">-- / --</strong>
+            <strong class="accent-purple" id="last-mesh-info">-- / --</strong>
           </div>
           <div class="stat-row">
             <span>Dispatch Timestamp</span>
@@ -781,443 +144,66 @@
       </div>
     </div>
 
-    <!-- Main Data Tables Section with Tabs -->
+    <!-- Telemetry tables -->
     <div class="card table-card">
       <div class="tab-bar">
-        <button class="tab-btn active" id="tab-aircraft" onclick="switchTab('aircraft')">
+        <button class="tab-btn active" id="tab-aircraft">
           ✈️ Airborne Recon (<span id="tab-ac-count">0</span>)
         </button>
-        <button class="tab-btn" id="tab-mesh" onclick="switchTab('mesh')">
+        <button class="tab-btn" id="tab-mesh">
           📡 LoRa Mesh Recon (<span id="tab-mesh-count">0</span>)
         </button>
       </div>
 
       <div class="table-header">
         <div>
-          <h2 style="font-size: 0.95rem; font-weight: 700;" id="table-title">Accumulated Airborne Telemetry</h2>
-          <p style="font-size: 0.75rem; color: var(--text-muted);" id="table-subtitle">Aircraft signals intercepted in current dead drop window</p>
+          <h2 class="table-title" id="table-title">Accumulated Airborne Telemetry</h2>
+          <p class="table-subtitle" id="table-subtitle">Aircraft signals intercepted in current dead drop window</p>
         </div>
         <div class="search-box">
           <span class="search-icon">🔍</span>
-          <input type="text" id="search-input" placeholder="Search signals..." oninput="filterTable()">
+          <input type="text" id="search-input" placeholder="Search signals...">
         </div>
       </div>
 
       <div class="table-wrapper">
         <table id="main-table">
-          <thead id="table-head">
-            <!-- Dynamically populated -->
-          </thead>
+          <thead id="table-head"></thead>
           <tbody id="table-body">
-            <tr>
-              <td colspan="6" class="empty-state">Loading signal telemetry...</td>
-            </tr>
+            <tr><td colspan="6" class="empty-state">Loading signal telemetry...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Snapshot Archive -->
+    <!-- Snapshot archive -->
     <div class="card">
       <div class="card-title">
         <span>Cryptographic Payload Archive</span>
-        <span style="font-size: 0.75rem; color: var(--text-dim);" id="snapshot-count-label">0 Files</span>
+        <span class="archive-count" id="snapshot-count-label">0 Files</span>
       </div>
       <div class="history-list" id="snapshot-history">
-        <div class="empty-state" style="padding: 1rem;">No payload snapshots archived yet.</div>
+        <div class="empty-state empty-state-compact">No payload snapshots archived yet.</div>
       </div>
     </div>
   </div>
 
   <div id="toast" class="toast">Action triggered</div>
 
-  <script>
-    // Injected by the server when it serves this page. Control endpoints require
-    // it, and a cross-origin page cannot read this HTML, so it also blocks CSRF.
-    const CONTROL_TOKEN = '__CONTROL_TOKEN__';
-
-    let currentTab = 'aircraft';
-    let allAircraft = [];
-    let allMeshNodes = [];
-    let sortCol = 'first_seen';
-    let sortAsc = false;
-    let lastRenderKey = '';
-
-    // Every value below reaches innerHTML, and callsigns come off the ADS-B feed
-    // while node ids come from whoever can POST /api/wardrive. Neither is trusted.
-    function esc(v) {
-      if (v === undefined || v === null) return '';
-      return String(v)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    function fmtNum(n) {
-      if (n === undefined || n === null) return '0';
-      return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-    }
-
-    // Missing telemetry is now null rather than a fabricated 0, so render it
-    // as unknown instead of implying the aircraft is stationary or heading north.
-    function fmtOpt(v, suffix) {
-      if (v === undefined || v === null) return '<span style="color: var(--text-dim);">--</span>';
-      return esc(fmtNum(v)) + (suffix || '');
-    }
-
-    function controlFetch(url, options) {
-      const opts = Object.assign({}, options);
-      opts.headers = Object.assign({ 'X-Control-Token': CONTROL_TOKEN }, opts.headers || {});
-      return fetch(url, opts);
-    }
-
-    function showToast(msg) {
-      const toast = document.getElementById('toast');
-      toast.innerText = msg;
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3000);
-    }
-
-    // The deep link embeds the ingest key, so it lives behind an authenticated
-    // endpoint now rather than riding along in every /api/status response.
-    async function openMeshMapperModal() {
-      const modal = document.getElementById('meshmapper-modal');
-      if (modal) modal.classList.add('active');
-      const input = document.getElementById('meshmapper-url-input');
-      try {
-        const res = await controlFetch('/api/meshmapper-link');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (data.meshmapper_link) input.value = data.meshmapper_link;
-      } catch (err) {
-        input.value = 'Could not load link — check the DedDrop logs.';
-      }
-    }
-
-    function closeMeshMapperModal(e) {
-      if (e && e.target && e.target !== document.getElementById('meshmapper-modal') && !e.target.classList.contains('modal-close')) {
-        return;
-      }
-      const modal = document.getElementById('meshmapper-modal');
-      if (modal) modal.classList.remove('active');
-    }
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const modal = document.getElementById('meshmapper-modal');
-        if (modal) modal.classList.remove('active');
-      }
-    });
-
-    function copyMeshMapperLink() {
-      const input = document.getElementById('meshmapper-url-input');
-      input.select();
-      // clipboard API is unavailable on plain-http origins other than localhost,
-      // which is exactly how this dashboard is usually reached over a LAN.
-      const done = () => showToast('MeshMapper deep link copied to clipboard!');
-      if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(input.value).then(done, () => {
-          showToast('Copy failed — select the text and copy manually.');
-        });
-      } else if (document.execCommand('copy')) {
-        done();
-      } else {
-        showToast('Copy failed — select the text and copy manually.');
-      }
-    }
-
-    async function fetchStatus() {
-      try {
-        const res = await fetch('/api/status');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-
-        // Update status badge
-        document.getElementById('status-text').innerText = data.dry_run ? 'Dry Run Mode' : 'Online & Active';
-        document.getElementById('service-status').style.borderColor = data.dry_run ? 'rgba(245, 158, 11, 0.4)' : 'rgba(16, 185, 129, 0.4)';
-        document.getElementById('status-pulse').style.backgroundColor = data.dry_run ? 'var(--accent-amber)' : 'var(--accent-emerald)';
-
-        // Accumulators
-        document.getElementById('acc-count').innerText = fmtNum(data.accumulator_count || 0);
-        document.getElementById('mesh-acc-count').innerText = fmtNum(data.mesh_accumulator_count || 0);
-        document.getElementById('tab-ac-count').innerText = fmtNum(data.accumulator_count || 0);
-        document.getElementById('tab-mesh-count').innerText = fmtNum(data.mesh_accumulator_count || 0);
-        document.getElementById('ingested-pings-label').innerText = fmtNum(data.ingested_pings_count || 0);
-        document.getElementById('poll-count-badge').innerText = (data.poll_count || 0) + ' Polls';
-
-        // Window progress
-        const elapsedH = data.elapsed_hours || 0;
-        const totalH = data.upload_interval_hours || 6;
-        const pct = Math.min(100, (elapsedH / totalH) * 100);
-        document.getElementById('window-progress').style.width = pct.toFixed(1) + '%';
-        document.getElementById('window-timer').innerText = `${elapsedH.toFixed(2)}h / ${totalH}h (${pct.toFixed(0)}%)`;
-
-        // Surface a retained window so a failing upload is visible, not silent.
-        const retryEl = document.getElementById('retry-notice');
-        if (data.retry_pending_in > 0) {
-          retryEl.style.display = '';
-          retryEl.innerText = `⚠ Last dispatch failed — window retained, retrying in ${Math.ceil(data.retry_pending_in / 60)} min`;
-        } else {
-          retryEl.style.display = 'none';
-        }
-
-        // Last Upload Result
-        if (data.last_upload) {
-          const up = data.last_upload;
-          document.getElementById('last-ac-info').innerText = `${fmtNum(up.aircraft_count || 0)} sent / ${fmtNum(up.aircraft_imported || 0)} new`;
-          document.getElementById('last-mesh-info').innerText = `${fmtNum(up.mesh_count || 0)} sent / ${fmtNum(up.mesh_imported || 0)} new`;
-          document.getElementById('last-upload-time').innerText = up.timestamp ? new Date(up.timestamp * 1000).toLocaleTimeString() : 'Never';
-        }
-
-      } catch (err) {
-        document.getElementById('status-text').innerText = 'Disconnected';
-        document.getElementById('status-pulse').style.backgroundColor = 'var(--accent-rose)';
-      }
-    }
-
-    async function fetchUserStats() {
-      try {
-        const res = await fetch('/api/user-stats');
-        if (!res.ok) return;
-        const data = await res.json();
-        
-        document.getElementById('wdg-username').innerText = data.username || 'WDGWars User';
-        document.getElementById('wdg-total-captures').innerText = fmtNum(data.total || 0);
-        document.getElementById('wdg-wifi').innerText = fmtNum(data.wifi || 0);
-        document.getElementById('wdg-ble').innerText = fmtNum(data.ble || 0);
-        document.getElementById('wdg-adsb').innerText = fmtNum(data.aircraft || data.adsb || 0);
-        document.getElementById('wdg-mesh').innerText = fmtNum(data.mesh || 0);
-        document.getElementById('wdg-flock').innerText = fmtNum(data.flock || data.flock_count || 0);
-      } catch (err) {}
-    }
-
-    async function fetchTablesData() {
-      try {
-        const [resAc, resMesh] = await Promise.all([
-          fetch('/api/aircraft'),
-          fetch('/api/mesh-nodes')
-        ]);
-        if (resAc.ok) allAircraft = await resAc.json();
-        if (resMesh.ok) allMeshNodes = await resMesh.json();
-        renderActiveTable();
-      } catch (err) {}
-    }
-
-    async function fetchSnapshots() {
-      try {
-        const res = await fetch('/api/snapshots');
-        if (!res.ok) return;
-        const files = await res.json();
-        document.getElementById('snapshot-count-label').innerText = files.length + ' Files';
-        const list = document.getElementById('snapshot-history');
-        if (files.length === 0) {
-          list.innerHTML = '<div class="empty-state" style="padding: 1rem;">No payload snapshots archived yet.</div>';
-          return;
-        }
-        list.innerHTML = files.map(f => `
-          <div class="history-item">
-            <span>💀 ${esc(f.name)}</span>
-            <span style="color: var(--accent-cyan);">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
-            <span style="color: var(--accent-purple);">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
-            <span style="color: var(--text-dim);">${((f.size || 0) / 1024).toFixed(1)} KB</span>
-          </div>
-        `).join('');
-      } catch (err) {}
-    }
-
-    function switchTab(tab) {
-      currentTab = tab;
-      document.getElementById('tab-aircraft').classList.toggle('active', tab === 'aircraft');
-      document.getElementById('tab-mesh').classList.toggle('active', tab === 'mesh');
-      
-      if (tab === 'aircraft') {
-        document.getElementById('table-title').innerText = 'Accumulated Airborne Telemetry';
-        document.getElementById('table-subtitle').innerText = 'Aircraft signals intercepted in current dead drop window';
-      } else {
-        document.getElementById('table-title').innerText = 'Accumulated LoRa Mesh Telemetry';
-        document.getElementById('table-subtitle').innerText = 'Mesh nodes ingested from MeshMapper wardriving pings';
-      }
-      renderActiveTable();
-    }
-
-    function sortTable(col) {
-      if (sortCol === col) sortAsc = !sortAsc;
-      else { sortCol = col; sortAsc = true; }
-      renderActiveTable();
-    }
-
-    function renderActiveTable(force) {
-      const query = document.getElementById('search-input').value.toUpperCase();
-      const head = document.getElementById('table-head');
-      const tbody = document.getElementById('table-body');
-      const wrapper = document.querySelector('.table-wrapper');
-
-      // Rebuilding identical rows every 5s threw away scroll position and any
-      // in-progress text selection. Skip the write when nothing changed.
-      const key = [currentTab, query, sortCol, sortAsc,
-                   allAircraft.length, allMeshNodes.length,
-                   currentTab === 'aircraft'
-                     ? allAircraft.map(a => a.icao + a.first_seen).join()
-                     : allMeshNodes.map(m => m.node_id + m.first_seen).join()
-                  ].join('|');
-      if (!force && key === lastRenderKey) return;
-      lastRenderKey = key;
-      const scrollTop = wrapper ? wrapper.scrollTop : 0;
-      const restore = () => { if (wrapper) wrapper.scrollTop = scrollTop; };
-
-      if (currentTab === 'aircraft') {
-        head.innerHTML = `
-          <tr>
-            <th onclick="sortTable('icao')">ICAO ↕</th>
-            <th onclick="sortTable('callsign')">Callsign ↕</th>
-            <th onclick="sortTable('alt_ft')">Altitude (ft) ↕</th>
-            <th onclick="sortTable('speed_kt')">Speed (kt) ↕</th>
-            <th onclick="sortTable('heading')">Heading ↕</th>
-            <th onclick="sortTable('first_seen')">First Seen ↕</th>
-          </tr>
-        `;
-        let filtered = allAircraft.filter(a => 
-          (a.icao || '').toUpperCase().includes(query) || 
-          (a.callsign || '').toUpperCase().includes(query)
-        );
-        filtered.sort((a, b) => {
-          let valA = a[sortCol] ?? ''; let valB = b[sortCol] ?? '';
-          if (typeof valA === 'string') valA = valA.toUpperCase();
-          if (typeof valB === 'string') valB = valB.toUpperCase();
-          return sortAsc ? (valA < valB ? -1 : 1) : (valA > valB ? -1 : 1);
-        });
-
-        if (filtered.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${allAircraft.length === 0 ? 'No aircraft signals in window.' : 'No matching aircraft signals.'}</td></tr>`;
-          restore();
-          return;
-        }
-
-        tbody.innerHTML = filtered.map(a => `
-          <tr>
-            <td><span class="icao-badge">${esc(a.icao)}</span></td>
-            <td>${a.callsign ? esc(a.callsign) : '<span style="color: var(--text-dim);">--</span>'}</td>
-            <td>${fmtOpt(a.alt_ft)}</td>
-            <td>${fmtOpt(a.speed_kt)}</td>
-            <td>${fmtOpt(a.heading, '°')}</td>
-            <td>${esc(a.first_seen) || '--'}</td>
-          </tr>
-        `).join('');
-        restore();
-
-      } else {
-        head.innerHTML = `
-          <tr>
-            <th onclick="sortTable('node_id')">Node ID ↕</th>
-            <th onclick="sortTable('node_type')">Type ↕</th>
-            <th onclick="sortTable('lat')">Latitude ↕</th>
-            <th onclick="sortTable('lon')">Longitude ↕</th>
-            <th onclick="sortTable('rssi')">RSSI (dBm) ↕</th>
-            <th onclick="sortTable('first_seen')">First Seen ↕</th>
-          </tr>
-        `;
-        let filtered = allMeshNodes.filter(m => 
-          (m.node_id || '').toUpperCase().includes(query) || 
-          (m.node_type || '').toUpperCase().includes(query)
-        );
-        filtered.sort((a, b) => {
-          let valA = a[sortCol] ?? ''; let valB = b[sortCol] ?? '';
-          if (typeof valA === 'string') valA = valA.toUpperCase();
-          if (typeof valB === 'string') valB = valB.toUpperCase();
-          return sortAsc ? (valA < valB ? -1 : 1) : (valA > valB ? -1 : 1);
-        });
-
-        if (filtered.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${allMeshNodes.length === 0 ? 'No mesh nodes ingested in current window.' : 'No matching mesh nodes.'}</td></tr>`;
-          restore();
-          return;
-        }
-
-        tbody.innerHTML = filtered.map(m => `
-          <tr>
-            <td><span class="mesh-badge">${esc(m.node_id)}</span></td>
-            <td style="color: var(--accent-purple); font-weight: 600;">${esc(m.node_type || 'REPEATER')}</td>
-            <td>${typeof m.lat === 'number' ? m.lat.toFixed(5) : '--'}</td>
-            <td>${typeof m.lon === 'number' ? m.lon.toFixed(5) : '--'}</td>
-            <td>${m.rssi !== null && m.rssi !== undefined ? esc(m.rssi) + ' dBm' : '<span style="color: var(--text-dim);">--</span>'}</td>
-            <td>${esc(m.first_seen) || '--'}</td>
-          </tr>
-        `).join('');
-        restore();
-      }
-    }
-
-    function filterTable() {
-      renderActiveTable();
-    }
-
-    async function triggerPoll() {
-      const btn = document.getElementById('btn-poll');
-      btn.disabled = true;
-      try {
-        const res = await controlFetch('/api/trigger-poll', { method: 'POST' });
-        const data = await res.json();
-        showToast(res.ok ? (data.message || 'Poll triggered!')
-                         : (data.error || 'Poll rejected'));
-        setTimeout(refreshData, 1000);
-      } catch (err) {
-        showToast('Error triggering poll');
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    async function triggerFlush() {
-      const btn = document.getElementById('btn-flush');
-      btn.disabled = true;
-      try {
-        const res = await controlFetch('/api/trigger-flush', { method: 'POST' });
-        const data = await res.json();
-        showToast(res.ok ? (data.message || 'Flush & Dispatch triggered!')
-                         : (data.error || 'Flush rejected'));
-        setTimeout(refreshData, 1500);
-      } catch (err) {
-        showToast('Error triggering flush');
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    function refreshData() {
-      fetchStatus();
-      fetchTablesData();
-    }
-
-    // Split by how fast each thing actually changes. Snapshots roll over once
-    // per upload window and remote user stats are server-cached for 60s, so
-    // polling both every 5s was pure overhead.
-    refreshData();
-    fetchUserStats();
-    fetchSnapshots();
-    setInterval(refreshData, 5000);
-    setInterval(fetchUserStats, 60000);
-    setInterval(fetchSnapshots, 30000);
-  </script>
-  <!-- MeshMapper Custom API Integration Modal -->
-  <div class="modal-overlay" id="meshmapper-modal" onclick="closeMeshMapperModal(event)">
-    <div class="modal-content" onclick="event.stopPropagation()">
+  <!-- MeshMapper deep-link modal -->
+  <div class="modal-overlay" id="meshmapper-modal">
+    <div class="modal-content">
       <div class="modal-header">
-        <div class="modal-title">
-          📡 MeshMapper Ingest Node (LoRa Wardrive Target)
-        </div>
-        <button class="modal-close" onclick="closeMeshMapperModal()">&times;</button>
+        <div class="modal-title">📡 MeshMapper Ingest Node (LoRa Wardrive Target)</div>
+        <button class="modal-close" id="btn-close-modal" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        <p class="modal-hint">
           Copy deep link below → MeshMapper → Settings → API Endpoints → <strong>"Import from Clipboard"</strong>:
         </p>
         <div class="link-copy-box">
-          <input type="text" id="meshmapper-url-input" readonly value="meshmapper://custom-api?url=http://localhost:8080/api/wardrive&key=YOUR_KEY">
-          <button class="btn" style="color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.5);" onclick="copyMeshMapperLink()">
-            📋 Copy Link
-          </button>
+          <input type="text" id="meshmapper-url-input" readonly value="Loading…">
+          <button class="btn btn-mesh" id="btn-copy-link">📋 Copy Link</button>
         </div>
       </div>
     </div>

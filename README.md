@@ -6,7 +6,7 @@
 
 - **ADS-B Aircraft Accumulator**: Polls `aircraft.json` from readsb/tar1090 (default: 30s), accumulates seen aircraft in memory, and flushes HMAC-signed batches to WDGWars (default: 6h).
 - **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper.
-- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. No external CDN or font requests — it works fully offline.
+- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. Native ES modules with no build step, a strict CSP, and no external CDN or font requests — it works fully offline.
 - **State Persistence & Recovery**: Accumulator state persists to `/data/state/accumulator.json` across container restarts. Saved snapshots provide an audit trail.
 - **No Silent Data Loss**: A failed upload retains the accumulated window and retries it rather than discarding it.
 
@@ -106,7 +106,8 @@ MeshMapper can push wardriving pings directly to DedDrop:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/` | none | Dashboard |
+| `GET` | `/` | none | Dashboard (HTML shell, `no-store`) |
+| `GET` | `/app.css`, `/js/*.js` | none | Dashboard assets (ETag revalidated) |
 | `GET` | `/healthz` | none | Liveness probe |
 | `GET` | `/api/status` | none | Counters, window progress, last upload result |
 | `GET` | `/api/aircraft` | none | Accumulated aircraft in the current window |
@@ -173,9 +174,23 @@ deddrop/
   uploader.py    HMAC envelope, chunking, retry policy
   webapp.py      dashboard, telemetry API, ingest, control endpoints
   service.py     poll/flush lifecycle and entry point
-web/index.html   the dashboard (no build step, no external requests)
+web/
+  index.html     markup only — no inline script, no inline styles
+  app.css        the stylesheet
+  js/
+    main.js      entry point; wires DOM events and refresh loops
+    api.js       every call to the DedDrop HTTP API
+    panels.js    status badge, stat cards, profile banner, archive list
+    table.js     tab state, sorting, filtering, rendering
+    ui.js        toasts and the MeshMapper modal
+    format.js    escaping and value formatting
 tests/           one module per source module
 ```
+
+The dashboard uses native ES modules — no bundler, no `npm install`, no build
+step. Because no inline script or style remains, the server can send a strict
+`Content-Security-Policy` (`script-src 'self'`, no `unsafe-inline`), so injected
+markup cannot execute even if an escaping bug slipped through.
 
 `normalize.py` deliberately imports nothing from the rest of the package, so the
 translation logic can be tested without touching state, disk, or the network.

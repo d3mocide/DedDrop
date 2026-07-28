@@ -10,6 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
 import support
@@ -226,3 +227,103 @@ class TestDashboard(WebServerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaticAssets(WebServerCase):
+    def test_serves_the_stylesheet(self):
+        status, body, headers = request(f"{self.base}/app.css")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertIn(":root", body)
+
+    def test_serves_es_modules_with_a_js_content_type(self):
+        status, body, headers = request(f"{self.base}/js/main.js")
+        self.assertEqual(status, 200)
+        # A wrong Content-Type makes the browser refuse to run the module.
+        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+        self.assertIn("import", body)
+
+    def test_assets_revalidate_with_an_etag(self):
+        _, _, headers = request(f"{self.base}/app.css")
+        etag = headers["ETag"]
+        self.assertTrue(etag)
+        status, body, _ = request(f"{self.base}/app.css",
+                                  headers={"If-None-Match": etag})
+        self.assertEqual(status, 304)
+        self.assertEqual(body, "")
+
+    def test_changed_asset_gets_a_new_etag(self):
+        _, _, first = request(f"{self.base}/app.css")
+        css = config.WEB_DIR / "app.css"
+        original = css.read_bytes()
+        self.addCleanup(css.write_bytes, original)
+        css.write_bytes(original + b"\n.injected{}\n")
+        _, _, second = request(f"{self.base}/app.css")
+        self.assertNotEqual(first["ETag"], second["ETag"])
+
+    def test_directory_traversal_is_refused(self):
+        for attack in ("/../deddrop/config.py",
+                       "/js/../../deddrop/config.py",
+                       "/%2e%2e/deddrop/config.py",
+                       "/js/%2e%2e%2f%2e%2e%2fdeddrop/config.py",
+                       "/....//deddrop/config.py",
+                       "/js/..%2f..%2fdeddrop/uploader.py"):
+            with self.subTest(path=attack):
+                status, body, _ = request(f"{self.base}{attack}")
+                self.assertEqual(status, 404)
+                self.assertNotIn("WDGWARS_API_KEY", body)
+
+    def test_absolute_path_escape_is_refused(self):
+        status, _, _ = request(f"{self.base}//etc/passwd")
+        self.assertEqual(status, 404)
+
+    def test_unlisted_extensions_are_not_served(self):
+        secret = config.WEB_DIR / "notes.txt"
+        secret.write_text("should not be served")
+        self.addCleanup(secret.unlink)
+        status, body, _ = request(f"{self.base}/notes.txt")
+        self.assertEqual(status, 404)
+        self.assertNotIn("should not be served", body)
+
+    def test_symlink_out_of_web_dir_is_refused(self):
+        link = config.WEB_DIR / "escape.js"
+        target = Path(__file__).resolve().parent.parent / "deddrop" / "config.py"
+        try:
+            link.symlink_to(target)
+        except OSError:
+            self.skipTest("symlinks unavailable")
+        self.addCleanup(link.unlink)
+        status, body, _ = request(f"{self.base}/escape.js")
+        self.assertEqual(status, 404)
+        self.assertNotIn("WDGWARS_API_KEY", body)
+
+    def test_control_characters_are_refused(self):
+        """A NUL can smuggle an allowed extension past the check and crash resolve()."""
+        for attack in ("/js/main.js%00.png", "/app%00.css", "/js/%01main.js"):
+            with self.subTest(path=attack):
+                status, _, _ = request(f"{self.base}{attack}")
+                self.assertEqual(status, 404)
+
+    def test_missing_asset_is_404(self):
+        status, _, _ = request(f"{self.base}/js/nope.js")
+        self.assertEqual(status, 404)
+
+
+class TestContentSecurityPolicy(WebServerCase):
+    def test_dashboard_sends_a_strict_csp(self):
+        _, _, headers = request(f"{self.base}/")
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("script-src 'self'", csp)
+        self.assertNotIn("unsafe-inline", csp)
+        self.assertNotIn("unsafe-eval", csp)
+
+    def test_dashboard_has_no_inline_script_or_handlers(self):
+        """A strict CSP is only meaningful if nothing relies on inline JS."""
+        _, body, _ = request(f"{self.base}/")
+        self.assertNotIn("onclick=", body)
+        self.assertNotIn("<script>", body)
+        self.assertNotIn('style="', body)
+
+    def test_dashboard_is_not_cached(self):
+        _, _, headers = request(f"{self.base}/")
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
