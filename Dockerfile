@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-COPY deddrop.py .
+COPY deddrop ./deddrop
 COPY web ./web
 
 RUN useradd --create-home --uid 1000 uploader \
@@ -24,4 +24,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 sys.exit(0) if os.environ.get('WEB_ENABLED','true').lower() in ('0','false','no') \
 else urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('WEB_PORT','8080'), timeout=4)"
 
-ENTRYPOINT ["python3", "-u", "deddrop.py"]
+ENTRYPOINT ["python3", "-u", "-m", "deddrop"]

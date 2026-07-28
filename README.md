@@ -69,7 +69,7 @@
 | `WEB_ENABLED` | `true` | Enable/disable the web dashboard |
 | `WEB_BIND` | `0.0.0.0` | Bind address. Set `127.0.0.1` if MeshMapper doesn't need LAN access |
 | `WEB_PORT` | `8080` | Port for the web dashboard |
-| `WEB_DIR` | `<script dir>/web` | Directory containing `index.html` |
+| `WEB_DIR` | `<repo root>/web` | Directory containing `index.html` |
 | `PUBLIC_HOST` | *(empty)* | Public host/IP for the MeshMapper deep link (e.g. `192.168.1.100:8080`) |
 | `CORS_ALLOW_ORIGIN` | *(empty)* | Origin allowed to read the API cross-origin. Empty = same-origin only |
 | `MAX_BODY_BYTES` | `8388608` | Maximum accepted `/api/wardrive` request body |
@@ -155,11 +155,30 @@ Content-Type: application/json
 No runtime or test dependencies beyond the Python 3.10+ stdlib.
 
 ```bash
-python3 -m unittest discover -s tests -v   # run the test suite
-python3 -m pyflakes deddrop.py tests/      # lint (pip install pyflakes)
+python3 -m deddrop                                  # run it directly
+python3 -m unittest discover -s tests -t tests -v   # run the test suite
+python3 -m pyflakes deddrop/ tests/                 # lint (pip install pyflakes)
 ```
 
-Both run in CI on every push, along with a Docker build and container smoke test.
+Both checks run in CI on every push, along with a Docker build and container smoke test.
+
+### Project layout
+
+```
+deddrop/
+  config.py      environment-driven settings, read once at import
+  runtime.py     state shared between the poll loop and the web server
+  normalize.py   tar1090 / MeshMapper payloads -> WDGWars records (pure)
+  storage.py     accumulator persistence and the snapshot archive
+  uploader.py    HMAC envelope, chunking, retry policy
+  webapp.py      dashboard, telemetry API, ingest, control endpoints
+  service.py     poll/flush lifecycle and entry point
+web/index.html   the dashboard (no build step, no external requests)
+tests/           one module per source module
+```
+
+`normalize.py` deliberately imports nothing from the rest of the package, so the
+translation logic can be tested without touching state, disk, or the network.
 
 ## Troubleshooting
 
