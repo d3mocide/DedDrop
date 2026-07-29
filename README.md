@@ -71,7 +71,7 @@
 | `WEB_PUBLISH_ADDR` | `0.0.0.0` | Host interface docker publishes the port on. `127.0.0.1` if MeshMapper doesn't need LAN access (compose only — not read by the app) |
 | `WEB_PORT` | `8080` | Port for the web dashboard, on both the host and container side |
 | `WEB_DIR` | `<repo root>/web` | Directory containing `index.html` |
-| `PUBLIC_HOST` | *(empty)* | Public host/IP for the MeshMapper deep link (e.g. `192.168.1.100:8080`) |
+| `PUBLIC_HOST` | *(empty)* | Public host/IP for the MeshMapper deep link (e.g. `192.168.1.100:8080`). A `http://` or `https://` prefix is stripped |
 | `CORS_ALLOW_ORIGIN` | *(empty)* | Origin allowed to read the API cross-origin. Empty = same-origin only |
 | `MAX_BODY_BYTES` | `8388608` | Maximum accepted `/api/wardrive` request body |
 
@@ -102,6 +102,10 @@ MeshMapper can push wardriving pings directly to DedDrop:
   header — query strings tend to end up in proxy and access logs.
 - **Quick Setup**: Click the **📡 MeshMapper Link** button on the dashboard to copy the
   deep link (`meshmapper://custom-api?url=...`).
+- **No scheme in the link**: MeshMapper prepends `https://` to the endpoint it is given,
+  so the link carries `host/api/wardrive` rather than `http://host/api/wardrive` — the
+  latter imports as `https://http://host/api/wardrive`. DedDrop itself serves plain
+  HTTP, so put it behind a TLS-terminating reverse proxy for MeshMapper to reach it.
 
 ## HTTP API
 

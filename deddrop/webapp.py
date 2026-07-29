@@ -98,14 +98,17 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         return self._authorized_key()
 
     def _meshmapper_link(self) -> str:
+        """Build the deep link MeshMapper imports from the clipboard.
+
+        The URL carries no scheme on purpose: MeshMapper prepends https:// to
+        whatever it is given, so sending "http://host" produces the unusable
+        "https://http://host/api/wardrive". A scheme in PUBLIC_HOST is stripped
+        for the same reason.
+        """
         if config.PUBLIC_HOST:
-            base = (config.PUBLIC_HOST.rstrip("/")
-                    if config.PUBLIC_HOST.startswith(("http://", "https://"))
-                    else f"http://{config.PUBLIC_HOST}")
+            base = config.PUBLIC_HOST.split("://", 1)[-1].strip("/")
         else:
-            host = self.headers.get("Host") or f"localhost:{config.WEB_PORT}"
-            scheme = "https" if self.headers.get("X-Forwarded-Proto") == "https" else "http"
-            base = f"{scheme}://{host}"
+            base = self.headers.get("Host") or f"localhost:{config.WEB_PORT}"
         key = config.MESHMAPPER_API_KEY or config.API_KEY or "YOUR_KEY"
         # Escape only what would truncate the link; ':' and '/' stay literal so
         # the format matches what MeshMapper already accepts.

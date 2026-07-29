@@ -214,15 +214,28 @@ class TestMeshMapperLink(WebServerCase):
             headers={"X-Control-Token": config.CONTROL_TOKEN})
         self.assertEqual(status, 200)
         link = json.loads(body)["meshmapper_link"]
-        self.assertTrue(link.startswith("meshmapper://custom-api?url=http://"))
+        self.assertTrue(link.startswith("meshmapper://custom-api?url=127.0.0.1:"), link)
+        self.assertIn("/api/wardrive", link)
         self.assertIn(API_KEY, link)
         self.assertEqual(headers.get("Cache-Control"), "no-store")
 
+    def test_link_carries_no_scheme(self):
+        """MeshMapper prepends https://, so a scheme here becomes https://http://."""
+        for public_host in ("192.168.1.100:8080", "http://192.168.1.100:8080",
+                            "https://192.168.1.100:8080/"):
+            with self.subTest(public_host=public_host):
+                with mock.patch.object(config, "PUBLIC_HOST", public_host):
+                    _, body, _ = request(f"{self.base}/api/meshmapper-link",
+                                         headers={"X-Control-Token": config.CONTROL_TOKEN})
+                link = json.loads(body)["meshmapper_link"]
+                self.assertIn("url=192.168.1.100:8080/api/wardrive", link)
+                self.assertNotIn("http", link)
+
     def test_public_host_overrides_the_host_header(self):
-        with mock.patch.object(config, "PUBLIC_HOST", "192.168.1.100:8080"):
+        with mock.patch.object(config, "PUBLIC_HOST", "deddrop.example.net"):
             _, body, _ = request(f"{self.base}/api/meshmapper-link",
                                  headers={"X-Control-Token": config.CONTROL_TOKEN})
-        self.assertIn("http://192.168.1.100:8080/api/wardrive",
+        self.assertIn("url=deddrop.example.net/api/wardrive",
                       json.loads(body)["meshmapper_link"])
 
 

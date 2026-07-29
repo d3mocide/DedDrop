@@ -14,6 +14,20 @@ from .runtime import default_state
 
 SNAPSHOT_LIST_LIMIT = 20
 
+# Shape of the dispatch summary uploader.upload_records records. Persisted
+# alongside the accumulator so a restart does not erase the last result.
+_LAST_UPLOAD_FIELDS = {
+    "timestamp": float,
+    "aircraft_count": int,
+    "mesh_count": int,
+    "aircraft_imported": int,
+    "aircraft_seen": int,
+    "mesh_imported": int,
+    "mesh_seen": int,
+    "success": bool,
+    "dry_run": bool,
+}
+
 # Summaries keyed by (name, mtime_ns, size). Snapshots are immutable once
 # written, so a hit is always valid and the dashboard's 5s poll costs nothing.
 _snapshot_cache: dict[tuple[str, int, int], dict] = {}
@@ -57,14 +71,45 @@ def coerce_state(raw) -> dict:
     return state
 
 
+def coerce_last_upload(raw) -> dict:
+    """Accept a persisted dispatch summary, dropping anything malformed.
+
+    A summary without a timestamp cannot be rendered, so it is discarded whole
+    rather than shown as a dispatch that happened at the epoch.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    summary = {}
+    for key, cast in _LAST_UPLOAD_FIELDS.items():
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            summary[key] = cast(value)
+        except (TypeError, ValueError):
+            log.warning("last_upload field %r was not a %s — dropped", key, cast.__name__)
+
+    return summary if "timestamp" in summary else {}
+
+
 def load_state() -> dict:
     try:
-        return coerce_state(json.loads(config.STATE_FILE.read_text()))
+        raw = json.loads(config.STATE_FILE.read_text())
     except FileNotFoundError:
         return default_state()
     except (OSError, json.JSONDecodeError) as e:
         log.warning("could not read state file (%s) — starting a fresh window", e)
         return default_state()
+
+    # The dispatch summary lives beside the state document rather than inside
+    # it: the poll loop owns state, while runtime.last_upload is written by the
+    # uploader and read by the dashboard.
+    with runtime.lock:
+        runtime.last_upload = coerce_last_upload(
+            raw.get("last_upload") if isinstance(raw, dict) else None)
+
+    return coerce_state(raw)
 
 
 def atomic_write(path: Path, blob: str) -> None:
@@ -90,7 +135,8 @@ def save_state(state: dict) -> None:
     # Serialize under the state lock so json.dumps never walks a dict another
     # thread is mutating; do the slow disk write without it held.
     with runtime.lock:
-        blob = json.dumps(state, separators=(",", ":"))
+        blob = json.dumps({**state, "last_upload": runtime.last_upload},
+                          separators=(",", ":"))
     with runtime.save_lock:
         atomic_write(config.STATE_FILE, blob)
 
