@@ -41,11 +41,14 @@ export async function refreshStatus() {
   // than letting it look like nothing happened.
   const retry = $('retry-notice');
   if (data.retry_pending_in > 0) {
-    retry.style.display = '';
-    retry.innerText = `⚠ Last dispatch failed — window retained, retrying in ` +
-                      `${Math.ceil(data.retry_pending_in / 60)} min`;
+    retry.classList.add('visible');
+    // innerText would print the markup, and the message is built from a number
+    // this module computed, so there is nothing untrusted to escape here.
+    retry.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>` +
+                      `<span>Last dispatch failed — window retained, retrying in ` +
+                      `${Math.ceil(data.retry_pending_in / 60)} min</span>`;
   } else {
-    retry.style.display = 'none';
+    retry.classList.remove('visible');
   }
 
   const up = data.last_upload;
@@ -107,11 +110,16 @@ export async function refreshSnapshots() {
       '<div class="empty-state empty-state-compact">No payload snapshots archived yet.</div>';
     return;
   }
+  // Name and counts are grouped separately so the row can stack them on a
+  // narrow screen instead of letting a long filename crush the counts.
   list.innerHTML = files.map((f) => `
     <div class="history-item">
-      <span>💀 ${esc(f.name)}</span>
-      <span class="hist-ac">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
-      <span class="hist-mesh">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
-      <span class="hist-size">${((f.size || 0) / 1024).toFixed(1)} KB</span>
+      <span class="hist-name" title="${esc(f.name)}">
+        <svg class="icon" aria-hidden="true"><use href="#i-skull"/></svg>${esc(f.name)}</span>
+      <span class="hist-stats">
+        <span class="hist-ac">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
+        <span class="hist-mesh">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
+        <span class="hist-size">${((f.size || 0) / 1024).toFixed(1)} KB</span>
+      </span>
     </div>`).join('');
 }

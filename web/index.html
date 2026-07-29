@@ -2,8 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- viewport-fit=cover lets the layout paint into the notch/home-indicator
+       area; app.css pays that back with env(safe-area-inset-*) padding. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#04060a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DedDrop — Telemetry Dead Drop</title>
+  <!-- .ico is the fallback browsers request on their own when they cannot use
+       the SVG; without it every page load takes a 404 for /favicon.ico. -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <!-- Replaced by the server when this page is served. Read by js/api.js;
        a meta tag rather than an inline script so a strict CSP still applies. -->
   <meta name="deddrop-control-token" content="__CONTROL_TOKEN__">
@@ -11,16 +22,116 @@
   <script type="module" src="/js/main.js"></script>
 </head>
 <body>
+  <!-- Icon sprite. Defined once here and referenced with <use href="#i-…">, so
+       the markup below and the strings built in panels.js/table.js draw from
+       the same geometry. Same-document references only — an external sprite
+       file would be a fetch, and the CSP does not allow one.
+
+       Two styles, deliberately: the skull is the brand mark and is solid
+       wherever it appears (it also survives being drawn at 13px, which a
+       2px-stroke outline does not); everything functional is line art on a
+       24-unit grid, matching the stat-label icons this page already used. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <!-- The eyes and nose are subpaths cut out with evenodd rather than
+           painted in a background colour, so the mark sits on the header's
+           gradient, the profile badge, and the favicon's dark tile alike. -->
+      <linearGradient id="brand-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#f43f5e"/>
+        <stop offset="1" stop-color="#a855f7"/>
+      </linearGradient>
+
+      <symbol id="i-skull" viewBox="0 0 24 24" fill-rule="evenodd">
+        <path d="M12 2C7.03 2 3 6.03 3 11c0 2.8 1.28 5.3 3.3 6.96V20a1 1 0 0 0 1 1h2.5v-2h1v2h2v-2h1v2H16.7a1 1 0 0 0 1-1v-2.04C19.72 16.3 21 13.8 21 11c0-4.97-4.03-9-9-9zM6.4 11a2.1 2.1 0 1 1 4.2 0 2.1 2.1 0 1 1-4.2 0zM13.4 11a2.1 2.1 0 1 1 4.2 0 2.1 2.1 0 1 1-4.2 0zM12 14.2l1.5 2.6h-3z"/>
+      </symbol>
+
+      <symbol id="i-signal" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4"/>
+        <path d="M4.9 4.9a10 10 0 0 0 0 14.2M19.1 19.1a10 10 0 0 0 0-14.2"/>
+      </symbol>
+
+      <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2 3 14h9l-1 8 10-12h-9z"/>
+      </symbol>
+
+      <symbol id="i-plane" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.7 5.2c.3.4.8.5 1.3.3l.5-.3c.4-.2.6-.6.5-1.1z"/>
+      </symbol>
+
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/>
+        <path d="m20 20-3.6-3.6"/>
+      </symbol>
+
+      <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="12" height="12" rx="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </symbol>
+
+      <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>
+        <path d="M12 9v4M12 17h.01"/>
+      </symbol>
+
+      <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 6 6 18M6 6l12 12"/>
+      </symbol>
+
+      <symbol id="i-sort" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m8 9 4-4 4 4M16 15l-4 4-4-4"/>
+      </symbol>
+
+      <symbol id="i-sort-asc" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19V5M6 11l6-6 6 6"/>
+      </symbol>
+
+      <symbol id="i-sort-desc" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M18 13l-6 6-6-6"/>
+      </symbol>
+
+      <symbol id="i-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+        <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+        <path d="M12 20h.01"/>
+      </symbol>
+
+      <symbol id="i-bluetooth" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m7 7 10 10-5 5V2l5 5L7 17"/>
+      </symbol>
+
+      <symbol id="i-mesh" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M3 12h3m12 0h3M12 3v3m0 12v3"/>
+      </symbol>
+
+      <symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </symbol>
+    </defs>
+  </svg>
+
   <div class="container">
     <header>
       <div class="brand">
         <div class="skull-badge">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M12 2C7.03 2 3 6.03 3 11c0 2.8 1.28 5.3 3.3 6.96V20a1 1 0 0 0 1 1h2.5v-2h1v2h2v-2h1v2H16.7a1 1 0 0 0 1-1v-2.04C19.72 16.3 21 13.8 21 11c0-4.97-4.03-9-9-9z"/>
-            <circle cx="8.5" cy="11.5" r="1.5" fill="currentColor"/>
-            <circle cx="15.5" cy="11.5" r="1.5" fill="currentColor"/>
-            <path d="M12 14v2"/>
-          </svg>
+          <svg class="icon icon-brand" aria-hidden="true"><use href="#i-skull"/></svg>
         </div>
         <div>
           <h1>DedDrop - WDGWars Telemetry Uploader</h1>
@@ -33,16 +144,24 @@
           <div class="status-pulse" id="status-pulse"></div>
           <span id="status-text">Connecting...</span>
         </div>
-        <button class="btn btn-mesh" id="btn-meshmapper">📡 MeshMapper Link</button>
-        <button class="btn" id="btn-poll">⚡ Poll Feed</button>
-        <button class="btn btn-gothic" id="btn-flush">💀 Flush &amp; Dispatch</button>
+        <button class="btn btn-mesh" id="btn-meshmapper">
+          <svg class="icon" aria-hidden="true"><use href="#i-signal"/></svg>MeshMapper Link
+        </button>
+        <button class="btn" id="btn-poll">
+          <svg class="icon" aria-hidden="true"><use href="#i-zap"/></svg>Poll Feed
+        </button>
+        <button class="btn btn-gothic" id="btn-flush">
+          <svg class="icon" aria-hidden="true"><use href="#i-skull"/></svg>Flush &amp; Dispatch
+        </button>
       </div>
     </header>
 
     <!-- WDGWars profile banner -->
     <div class="wdgwars-profile-card">
       <div class="wdg-header">
-        <div class="wdg-logo-icon">☠</div>
+        <div class="wdg-logo-icon">
+          <svg class="icon icon-brand" aria-hidden="true"><use href="#i-skull"/></svg>
+        </div>
         <div class="wdg-username" id="wdg-username">--</div>
       </div>
 
@@ -54,35 +173,35 @@
         <div class="wdg-mini-card">
           <div class="wdg-mini-val" id="wdg-wifi">0</div>
           <div class="wdg-mini-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            <svg class="icon" aria-hidden="true"><use href="#i-wifi"/></svg>
             WiFi
           </div>
         </div>
         <div class="wdg-mini-card">
           <div class="wdg-mini-val" id="wdg-ble">0</div>
           <div class="wdg-mini-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg>
+            <svg class="icon" aria-hidden="true"><use href="#i-bluetooth"/></svg>
             BLE
           </div>
         </div>
         <div class="wdg-mini-card">
           <div class="wdg-mini-val accent-cyan" id="wdg-adsb">0</div>
           <div class="wdg-mini-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.7 5.2c.3.4.8.5 1.3.3l.5-.3c.4-.2.6-.6.5-1.1z"/></svg>
+            <svg class="icon" aria-hidden="true"><use href="#i-plane"/></svg>
             ADS-B
           </div>
         </div>
         <div class="wdg-mini-card">
           <div class="wdg-mini-val accent-purple" id="wdg-mesh">0</div>
           <div class="wdg-mini-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M3 12h3m12 0h3M12 3v3m0 12v3"/></svg>
+            <svg class="icon" aria-hidden="true"><use href="#i-mesh"/></svg>
             Mesh
           </div>
         </div>
         <div class="wdg-mini-card">
           <div class="wdg-mini-val accent-rose" id="wdg-flock">0</div>
           <div class="wdg-mini-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
             Flock
           </div>
         </div>
@@ -146,12 +265,14 @@
 
     <!-- Telemetry tables -->
     <div class="card table-card">
-      <div class="tab-bar">
-        <button class="tab-btn active" id="tab-aircraft">
-          ✈️ Airborne Recon (<span id="tab-ac-count">0</span>)
+      <div class="tab-bar" role="tablist">
+        <button class="tab-btn active" id="tab-aircraft" role="tab" aria-selected="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-plane"/></svg>
+          Airborne Recon (<span id="tab-ac-count">0</span>)
         </button>
-        <button class="tab-btn" id="tab-mesh">
-          📡 LoRa Mesh Recon (<span id="tab-mesh-count">0</span>)
+        <button class="tab-btn" id="tab-mesh" role="tab" aria-selected="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-signal"/></svg>
+          LoRa Mesh Recon (<span id="tab-mesh-count">0</span>)
         </button>
       </div>
 
@@ -160,9 +281,24 @@
           <h2 class="table-title" id="table-title">Accumulated Airborne Telemetry</h2>
           <p class="table-subtitle" id="table-subtitle">Aircraft signals intercepted in current dead drop window</p>
         </div>
-        <div class="search-box">
-          <span class="search-icon">🔍</span>
-          <input type="text" id="search-input" placeholder="Search signals...">
+        <div class="table-controls">
+          <div class="search-box">
+            <span class="search-icon">
+              <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+            </span>
+            <input type="text" id="search-input" placeholder="Search signals..."
+                   autocomplete="off" autocorrect="off" autocapitalize="characters"
+                   spellcheck="false" enterkeyhint="search">
+          </div>
+          <!-- Only shown on narrow screens, where rows stack into cards and the
+               sortable column headers are hidden. -->
+          <div class="sort-control">
+            <label class="sort-label" for="sort-select">Sort</label>
+            <select id="sort-select"></select>
+            <button class="btn sort-dir" id="btn-sort-dir" aria-label="Toggle sort direction">
+              <svg class="icon" aria-hidden="true"><use href="#i-sort-desc"/></svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -194,8 +330,13 @@
   <div class="modal-overlay" id="meshmapper-modal">
     <div class="modal-content">
       <div class="modal-header">
-        <div class="modal-title">📡 MeshMapper Ingest Node (LoRa Wardrive Target)</div>
-        <button class="modal-close" id="btn-close-modal" aria-label="Close">&times;</button>
+        <div class="modal-title">
+          <svg class="icon" aria-hidden="true"><use href="#i-signal"/></svg>
+          MeshMapper Ingest Node (LoRa Wardrive Target)
+        </div>
+        <button class="modal-close" id="btn-close-modal" aria-label="Close">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+        </button>
       </div>
       <div class="modal-body">
         <p class="modal-hint">
@@ -203,7 +344,9 @@
         </p>
         <div class="link-copy-box">
           <input type="text" id="meshmapper-url-input" readonly value="Loading…">
-          <button class="btn btn-mesh" id="btn-copy-link">📋 Copy Link</button>
+          <button class="btn btn-mesh" id="btn-copy-link">
+            <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy Link
+          </button>
         </div>
       </div>
     </div>

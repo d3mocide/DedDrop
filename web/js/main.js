@@ -21,6 +21,44 @@ function refreshLive() {
   panels.refreshTables();
 }
 
+function refreshAll() {
+  refreshLive();
+  panels.refreshSnapshots();
+  panels.refreshUserStats();
+}
+
+// Polling a backgrounded page costs a phone battery and radio time for results
+// nobody is looking at, so the timers only run while the page is visible.
+const POLLS = [
+  [refreshLive, STATUS_INTERVAL_MS],
+  [panels.refreshSnapshots, SNAPSHOT_INTERVAL_MS],
+  [panels.refreshUserStats, USER_STATS_INTERVAL_MS],
+];
+
+let timers = [];
+
+function startPolling() {
+  if (timers.length) return;
+  timers = POLLS.map(([fn, interval]) => setInterval(fn, interval));
+}
+
+function stopPolling() {
+  timers.forEach(clearInterval);
+  timers = [];
+}
+
+function onVisibilityChange() {
+  if (document.hidden) {
+    stopPolling();
+    return;
+  }
+  // What is on screen was fetched before the page was hidden, and the dispatch
+  // timer has kept running the whole time. Refresh on the way back in rather
+  // than showing however stale that is until the next tick.
+  refreshAll();
+  startPolling();
+}
+
 async function runTrigger(button, action, delayMs) {
   button.disabled = true;
   try {
@@ -54,6 +92,12 @@ function wireEvents() {
   $('tab-mesh').addEventListener('click', () => table.switchTab('mesh'));
   $('search-input').addEventListener('input', () => table.render());
 
+  // Stands in for the column headers on narrow screens, where rows render as
+  // stacked cards and the <thead> is hidden.
+  $('sort-select').addEventListener('change', (e) =>
+    table.setSortColumn(e.currentTarget.value));
+  $('btn-sort-dir').addEventListener('click', table.toggleSortDir);
+
   // Delegated: the header row is re-rendered whenever the tab changes.
   $('table-head').addEventListener('click', (e) => {
     const col = e.target.closest('th')?.dataset.sort;
@@ -63,14 +107,14 @@ function wireEvents() {
 
 function start() {
   wireEvents();
+  table.init();
 
-  refreshLive();
-  panels.refreshUserStats();
-  panels.refreshSnapshots();
+  refreshAll();
 
-  setInterval(refreshLive, STATUS_INTERVAL_MS);
-  setInterval(panels.refreshSnapshots, SNAPSHOT_INTERVAL_MS);
-  setInterval(panels.refreshUserStats, USER_STATS_INTERVAL_MS);
+  // A page opened in a background tab starts with no timers; the first
+  // visibilitychange starts them.
+  if (!document.hidden) startPolling();
+  document.addEventListener('visibilitychange', onVisibilityChange);
 }
 
 // Modules are deferred by default, so the DOM is already parsed.
