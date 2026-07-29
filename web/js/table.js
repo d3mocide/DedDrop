@@ -31,6 +31,12 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// Populates the mobile sort control for the tab the page opens on; switchTab
+// refreshes it from then on.
+export function init() {
+  buildSortOptions();
+}
+
 export function setData({ aircraft, mesh }) {
   state.aircraft = aircraft;
   state.mesh = mesh;
@@ -41,9 +47,19 @@ export function switchTab(tab) {
   state.tab = tab;
   $('tab-aircraft').classList.toggle('active', tab === 'aircraft');
   $('tab-mesh').classList.toggle('active', tab === 'mesh');
+  $('tab-aircraft').setAttribute('aria-selected', String(tab === 'aircraft'));
+  $('tab-mesh').setAttribute('aria-selected', String(tab === 'mesh'));
   const [title, subtitle] = TITLES[tab];
   $('table-title').innerText = title;
   $('table-subtitle').innerText = subtitle;
+
+  // The two tabs share no columns, so a sort carried over from the other one
+  // would name a field that does not exist here.
+  if (!COLUMNS[tab].some(([col]) => col === state.sortCol)) {
+    state.sortCol = 'first_seen';
+    state.sortAsc = false;
+  }
+  buildSortOptions();
   render();
 }
 
@@ -51,6 +67,40 @@ export function sortBy(col) {
   if (state.sortCol === col) state.sortAsc = !state.sortAsc;
   else { state.sortCol = col; state.sortAsc = true; }
   render();
+}
+
+// The column headers are hidden on narrow screens, where each row renders as a
+// stacked card, so sorting needs a control that does not live in the <thead>.
+export function setSortColumn(col) {
+  if (state.sortCol === col) return;
+  state.sortCol = col;
+  state.sortAsc = true;
+  render();
+}
+
+export function toggleSortDir() {
+  state.sortAsc = !state.sortAsc;
+  render();
+}
+
+function buildSortOptions() {
+  const select = $('sort-select');
+  if (!select) return;
+  select.innerHTML = COLUMNS[state.tab]
+    .map(([col, label]) => `<option value="${col}">${label}</option>`).join('');
+  select.value = state.sortCol;
+}
+
+function syncSortControl() {
+  const select = $('sort-select');
+  if (select && select.value !== state.sortCol) select.value = state.sortCol;
+
+  const dir = $('btn-sort-dir');
+  if (!dir) return;
+  dir.innerText = state.sortAsc ? '↑' : '↓';
+  dir.setAttribute('aria-label',
+    state.sortAsc ? 'Sorted ascending — tap to sort descending'
+                  : 'Sorted descending — tap to sort ascending');
 }
 
 function rowsFor(tab, query) {
@@ -68,26 +118,34 @@ function rowsFor(tab, query) {
   });
 }
 
-function aircraftRow(a) {
-  return `<tr>
-    <td><span class="icao-badge">${esc(a.icao)}</span></td>
-    <td>${a.callsign ? esc(a.callsign) : '<span class="text-dim">--</span>'}</td>
-    <td>${fmtOpt(a.alt_ft)}</td>
-    <td>${fmtOpt(a.speed_kt)}</td>
-    <td>${fmtOpt(a.heading, '°')}</td>
-    <td>${esc(a.first_seen) || '--'}</td>
-  </tr>`;
+function aircraftCells(a) {
+  return [
+    `<span class="icao-badge">${esc(a.icao)}</span>`,
+    a.callsign ? esc(a.callsign) : '<span class="text-dim">--</span>',
+    fmtOpt(a.alt_ft),
+    fmtOpt(a.speed_kt),
+    fmtOpt(a.heading, '°'),
+    esc(a.first_seen) || '--',
+  ];
 }
 
-function meshRow(m) {
-  return `<tr>
-    <td><span class="mesh-badge">${esc(m.node_id)}</span></td>
-    <td class="mesh-type">${esc(m.node_type || 'REPEATER')}</td>
-    <td>${fmtCoord(m.lat)}</td>
-    <td>${fmtCoord(m.lon)}</td>
-    <td>${fmtRssi(m.rssi)}</td>
-    <td>${esc(m.first_seen) || '--'}</td>
-  </tr>`;
+function meshCells(m) {
+  return [
+    `<span class="mesh-badge">${esc(m.node_id)}</span>`,
+    `<span class="mesh-type">${esc(m.node_type || 'REPEATER')}</span>`,
+    fmtCoord(m.lat),
+    fmtCoord(m.lon),
+    fmtRssi(m.rssi),
+    esc(m.first_seen) || '--',
+  ];
+}
+
+// data-label carries the column name into each cell so the stacked mobile
+// layout can print it alongside the value once the header row is hidden.
+function rowHtml(cells) {
+  const labels = COLUMNS[state.tab];
+  return `<tr>${cells.map((html, i) =>
+    `<td data-label="${labels[i][1]}">${html}</td>`).join('')}</tr>`;
 }
 
 export function render(force = false) {
@@ -105,9 +163,18 @@ export function render(force = false) {
   const wrapper = document.querySelector('.table-wrapper');
   const scrollTop = wrapper ? wrapper.scrollTop : 0;
 
+  // U+2195 defaults to emoji presentation on iOS and renders as a coloured
+  // glyph out of step with the text, so the neutral arrow needs U+FE0E. The
+  // sorted column shows its actual direction rather than the same idle hint.
   $('table-head').innerHTML =
-    `<tr>${COLUMNS[state.tab].map(([col, label]) =>
-      `<th data-sort="${col}">${label} ↕</th>`).join('')}</tr>`;
+    `<tr>${COLUMNS[state.tab].map(([col, label]) => {
+      const active = col === state.sortCol;
+      const sorted = active ? (state.sortAsc ? 'ascending' : 'descending') : 'none';
+      const caret = active ? (state.sortAsc ? '↑' : '↓') : '↕︎';
+      return `<th data-sort="${col}" scope="col" aria-sort="${sorted}"` +
+             `${active ? ' class="sorted"' : ''}>` +
+             `${label} <span class="sort-caret">${caret}</span></th>`;
+    }).join('')}</tr>`;
 
   const rows = rowsFor(state.tab, query);
   if (rows.length === 0) {
@@ -117,9 +184,10 @@ export function render(force = false) {
       : 'No matching signals.';
     $('table-body').innerHTML = `<tr><td colspan="6" class="empty-state">${empty}</td></tr>`;
   } else {
-    const rowFn = state.tab === 'aircraft' ? aircraftRow : meshRow;
-    $('table-body').innerHTML = rows.map(rowFn).join('');
+    const cellFn = state.tab === 'aircraft' ? aircraftCells : meshCells;
+    $('table-body').innerHTML = rows.map((r) => rowHtml(cellFn(r))).join('');
   }
 
+  syncSortControl();
   if (wrapper) wrapper.scrollTop = scrollTop;
 }

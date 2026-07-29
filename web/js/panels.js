@@ -107,11 +107,15 @@ export async function refreshSnapshots() {
       '<div class="empty-state empty-state-compact">No payload snapshots archived yet.</div>';
     return;
   }
+  // Name and counts are grouped separately so the row can stack them on a
+  // narrow screen instead of letting a long filename crush the counts.
   list.innerHTML = files.map((f) => `
     <div class="history-item">
-      <span>💀 ${esc(f.name)}</span>
-      <span class="hist-ac">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
-      <span class="hist-mesh">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
-      <span class="hist-size">${((f.size || 0) / 1024).toFixed(1)} KB</span>
+      <span class="hist-name" title="${esc(f.name)}">💀 ${esc(f.name)}</span>
+      <span class="hist-stats">
+        <span class="hist-ac">${esc(fmtNum(f.aircraft_count || 0))} aircraft</span>
+        <span class="hist-mesh">${esc(fmtNum(f.mesh_nodes_count || 0))} mesh</span>
+        <span class="hist-size">${((f.size || 0) / 1024).toFixed(1)} KB</span>
+      </span>
     </div>`).join('');
 }

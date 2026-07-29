@@ -54,6 +54,12 @@ function wireEvents() {
   $('tab-mesh').addEventListener('click', () => table.switchTab('mesh'));
   $('search-input').addEventListener('input', () => table.render());
 
+  // Stands in for the column headers on narrow screens, where rows render as
+  // stacked cards and the <thead> is hidden.
+  $('sort-select').addEventListener('change', (e) =>
+    table.setSortColumn(e.currentTarget.value));
+  $('btn-sort-dir').addEventListener('click', table.toggleSortDir);
+
   // Delegated: the header row is re-rendered whenever the tab changes.
   $('table-head').addEventListener('click', (e) => {
     const col = e.target.closest('th')?.dataset.sort;
@@ -63,6 +69,7 @@ function wireEvents() {
 
 function start() {
   wireEvents();
+  table.init();
 
   refreshLive();
   panels.refreshUserStats();

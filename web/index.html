@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- viewport-fit=cover lets the layout paint into the notch/home-indicator
+       area; app.css pays that back with env(safe-area-inset-*) padding. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#04060a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DedDrop — Telemetry Dead Drop</title>
   <!-- Replaced by the server when this page is served. Read by js/api.js;
        a meta tag rather than an inline script so a strict CSP still applies. -->
@@ -146,11 +152,11 @@
 
     <!-- Telemetry tables -->
     <div class="card table-card">
-      <div class="tab-bar">
-        <button class="tab-btn active" id="tab-aircraft">
+      <div class="tab-bar" role="tablist">
+        <button class="tab-btn active" id="tab-aircraft" role="tab" aria-selected="true">
           ✈️ Airborne Recon (<span id="tab-ac-count">0</span>)
         </button>
-        <button class="tab-btn" id="tab-mesh">
+        <button class="tab-btn" id="tab-mesh" role="tab" aria-selected="false">
           📡 LoRa Mesh Recon (<span id="tab-mesh-count">0</span>)
         </button>
       </div>
@@ -160,9 +166,20 @@
           <h2 class="table-title" id="table-title">Accumulated Airborne Telemetry</h2>
           <p class="table-subtitle" id="table-subtitle">Aircraft signals intercepted in current dead drop window</p>
         </div>
-        <div class="search-box">
-          <span class="search-icon">🔍</span>
-          <input type="text" id="search-input" placeholder="Search signals...">
+        <div class="table-controls">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="search-input" placeholder="Search signals..."
+                   autocomplete="off" autocorrect="off" autocapitalize="characters"
+                   spellcheck="false" enterkeyhint="search">
+          </div>
+          <!-- Only shown on narrow screens, where rows stack into cards and the
+               sortable column headers are hidden. -->
+          <div class="sort-control">
+            <label class="sort-label" for="sort-select">Sort</label>
+            <select id="sort-select"></select>
+            <button class="btn sort-dir" id="btn-sort-dir" aria-label="Toggle sort direction">↓</button>
+          </div>
         </div>
       </div>
 
