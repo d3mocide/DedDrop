@@ -262,12 +262,19 @@ header {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 1.5rem;
   line-height: 1;
   cursor: pointer;
-  padding: 0.2rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
   border-radius: 4px;
   transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.modal-close .icon {
+  width: 20px;
+  height: 20px;
 }
 
 @media (hover: hover) {
@@ -492,6 +499,10 @@ header {
 .tab-btn {
   background: none;
   border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   color: var(--text-muted);
   font-size: 0.85rem;
   font-weight: 600;
@@ -546,12 +557,17 @@ header {
 
 .search-icon {
   position: absolute;
-  left: 0.75rem;
+  left: 0.7rem;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
   color: var(--text-muted);
   pointer-events: none;
-  font-size: 0.8rem;
+}
+
+.search-icon .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .table-wrapper {
@@ -713,6 +729,8 @@ td {
 
 .retry-notice {
   display: none;
+  align-items: center;
+  gap: 0.5rem;
   margin-top: 0.75rem;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
@@ -720,6 +738,10 @@ td {
   border: 1px solid rgba(245, 158, 11, 0.35);
   color: var(--accent-amber);
   font-size: 0.78rem;
+}
+
+.retry-notice.visible {
+  display: flex;
 }
 
 .table-title    { font-size: 0.95rem; font-weight: 700; }
@@ -743,10 +765,51 @@ td {
 
 .text-dim { color: var(--text-dim); }
 
+/* ── Icons ───────────────────────────────────────────────────────────────────
+   One sprite at the top of <body> holds every symbol; these rules size and
+   align the <use> references. Sizing in em means an icon tracks the font size
+   of whatever it sits in, so button, tab and label icons stay in proportion
+   without a class per context. */
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  /* Inherited by the symbol, so the solid skull picks it up. The line symbols
+     set fill="none" on themselves, and an element's own presentation attribute
+     beats an inherited value, so they are unaffected. */
+  fill: currentColor;
+  /* Icons are decorative next to a text label; without this they shrink
+     before the text does in a tight flex row. */
+  flex: none;
+  vertical-align: -0.2em;
+}
+
+/* The brand mark is the one icon that is sized by its container rather than
+   by the surrounding text. */
+.icon-brand {
+  width: 62%;
+  height: 62%;
+  vertical-align: baseline;
+}
+
+/* The header badge carries the favicon's gradient; the profile badge already
+   has that gradient as its tile, so its skull goes solid white on top. */
+.skull-badge .icon { fill: url(#brand-grad); }
+.wdg-logo-icon .icon { fill: #ffffff; }
+
+.hist-name .icon { margin-right: 0.4rem; }
+
 /* ── Sorting affordances ─────────────────────────────────────────────────── */
 .sort-caret {
+  width: 0.85em;
+  height: 0.85em;
   color: var(--text-dim);
-  font-size: 0.7rem;
 }
 
 th.sorted {

@@ -97,7 +97,8 @@ function syncSortControl() {
 
   const dir = $('btn-sort-dir');
   if (!dir) return;
-  dir.innerText = state.sortAsc ? '↑' : '↓';
+  dir.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-sort-` +
+                  `${state.sortAsc ? 'asc' : 'desc'}"/></svg>`;
   dir.setAttribute('aria-label',
     state.sortAsc ? 'Sorted ascending — tap to sort descending'
                   : 'Sorted descending — tap to sort ascending');
@@ -163,17 +164,18 @@ export function render(force = false) {
   const wrapper = document.querySelector('.table-wrapper');
   const scrollTop = wrapper ? wrapper.scrollTop : 0;
 
-  // U+2195 defaults to emoji presentation on iOS and renders as a coloured
-  // glyph out of step with the text, so the neutral arrow needs U+FE0E. The
-  // sorted column shows its actual direction rather than the same idle hint.
+  // Drawn rather than typed: the arrow characters this used to emit render at
+  // the mercy of the platform font, and U+2195 in particular defaults to emoji
+  // presentation on iOS. The sorted column shows its actual direction.
   $('table-head').innerHTML =
     `<tr>${COLUMNS[state.tab].map(([col, label]) => {
       const active = col === state.sortCol;
       const sorted = active ? (state.sortAsc ? 'ascending' : 'descending') : 'none';
-      const caret = active ? (state.sortAsc ? '↑' : '↓') : '↕︎';
+      const caret = active ? (state.sortAsc ? 'i-sort-asc' : 'i-sort-desc') : 'i-sort';
       return `<th data-sort="${col}" scope="col" aria-sort="${sorted}"` +
              `${active ? ' class="sorted"' : ''}>` +
-             `${label} <span class="sort-caret">${caret}</span></th>`;
+             `${label} <svg class="icon sort-caret" aria-hidden="true">` +
+             `<use href="#${caret}"/></svg></th>`;
     }).join('')}</tr>`;
 
   const rows = rowsFor(state.tab, query);
