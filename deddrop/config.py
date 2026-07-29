@@ -26,6 +26,9 @@ API_KEY = os.environ.get("WDGWARS_API_KEY", "").strip()
 MESHMAPPER_API_KEY = (os.environ.get("MESHMAPPER_API_KEY", "").strip() or API_KEY).strip()
 
 UPLOAD_URL = os.environ.get("WDGWARS_API_URL", "https://wdgwars.pl/endpoint/upload/").strip()
+# Mesh nodes are dispatched in their own request, so they can be pointed at a
+# dedicated route without moving the aircraft feed. Defaults to the same URL.
+MESH_UPLOAD_URL = (os.environ.get("WDGWARS_MESH_API_URL", "").strip() or UPLOAD_URL).strip()
 ME_URL = os.environ.get("WDGWARS_ME_URL", "https://wdgwars.pl/api/me").strip()
 
 # ── Timing ────────────────────────────────────────────────────────────────

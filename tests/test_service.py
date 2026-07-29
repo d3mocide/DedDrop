@@ -1,25 +1,31 @@
 """Poll and flush lifecycle."""
+import json
 import unittest
 from unittest import mock
 
 import support
 from deddrop import config, runtime, service, storage
+from deddrop.uploader import DispatchResult
 
 setUpModule = support.quiet_logs
 tearDownModule = support.restore_logs
+
+DISPATCHED = DispatchResult(True, True)
+NOTHING_LANDED = DispatchResult(False, False)
+MESH_REJECTED = DispatchResult(True, False)
 
 
 class TestFlushRetention(support.TempConfig):
     def _state(self):
         state = runtime.default_state()
         state["accumulator"] = {"A": {"icao": "A"}, "B": {"icao": "B"}}
-        state["mesh_accumulator"] = {"n1": {"node_id": "n1"}}
+        state["mesh_accumulator"] = {"n1": {"node_id": "n1", "lat": 1, "lon": 2}}
         return state
 
     def test_failed_upload_retains_the_window(self):
         """A failed upload must never discard the accumulated window."""
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=False):
+        with mock.patch.object(service, "upload_records", return_value=NOTHING_LANDED):
             self.assertFalse(service.do_flush(state, force=True))
         self.assertEqual(len(state["accumulator"]), 2)
         self.assertEqual(len(state["mesh_accumulator"]), 1)
@@ -27,20 +33,38 @@ class TestFlushRetention(support.TempConfig):
 
     def test_successful_upload_clears_the_window(self):
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=True):
+        with mock.patch.object(service, "upload_records", return_value=DISPATCHED):
             self.assertTrue(service.do_flush(state, force=True))
         self.assertEqual(state["accumulator"], {})
         self.assertEqual(state["mesh_accumulator"], {})
         self.assertEqual(state["poll_count"], 0)
 
+    def test_a_rejected_feed_is_retained_without_re_sending_the_other(self):
+        """Separate dispatches mean one feed's failure cannot drag back the other."""
+        state = self._state()
+        with mock.patch.object(service, "upload_records", return_value=MESH_REJECTED):
+            self.assertFalse(service.do_flush(state, force=True))
+        self.assertEqual(state["accumulator"], {})           # landed, so cleared
+        self.assertEqual(len(state["mesh_accumulator"]), 1)  # rejected, so retried
+        self.assertGreater(runtime.next_flush_attempt, 0)
+
+    def test_each_feed_gets_its_own_url(self):
+        state = self._state()
+        with mock.patch.object(config, "MESH_UPLOAD_URL", "http://mesh"), \
+             mock.patch.object(config, "UPLOAD_URL", "http://ac"), \
+             mock.patch.object(service, "upload_records", return_value=DISPATCHED) as up:
+            service.do_flush(state, force=True)
+        self.assertEqual(up.call_args.kwargs["aircraft_url"], "http://ac")
+        self.assertEqual(up.call_args.kwargs["mesh_url"], "http://mesh")
+
     def test_records_arriving_during_upload_survive(self):
         """Mid-upload ingests must not be wiped with the batch."""
         state = self._state()
 
-        def slow_upload(aircraft, mesh, key, url):
+        def slow_upload(aircraft, mesh, key, **urls):
             state["mesh_accumulator"]["n2"] = {"node_id": "n2"}     # new node
             state["accumulator"]["A"] = {"icao": "A", "alt_ft": 1}  # re-seen
-            return True
+            return DISPATCHED
 
         with mock.patch.object(service, "upload_records", side_effect=slow_upload):
             self.assertTrue(service.do_flush(state, force=True))
@@ -51,20 +75,30 @@ class TestFlushRetention(support.TempConfig):
 
     def test_retry_backoff_is_respected(self):
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=False):
+        with mock.patch.object(service, "upload_records", return_value=NOTHING_LANDED):
             service.do_flush(state, force=True)
         state["window_start"] = 0  # window is long overdue
-        with mock.patch.object(service, "upload_records", return_value=True) as up:
+        with mock.patch.object(service, "upload_records", return_value=DISPATCHED) as up:
             self.assertFalse(service.do_flush(state))  # still inside backoff
             up.assert_not_called()
 
     def test_backoff_clears_after_a_success(self):
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=False):
+        with mock.patch.object(service, "upload_records", return_value=NOTHING_LANDED):
             service.do_flush(state, force=True)
-        with mock.patch.object(service, "upload_records", return_value=True):
+        with mock.patch.object(service, "upload_records", return_value=DISPATCHED):
             service.do_flush(state, force=True)
         self.assertEqual(runtime.next_flush_attempt, 0.0)
+
+    def test_dispatch_summary_reports_each_feed(self):
+        state = self._state()
+        with mock.patch.object(service, "upload_records", side_effect=self._record_failure):
+            service.do_flush(state, force=True)
+
+        runtime.reset()
+        storage.load_state()
+        self.assertTrue(runtime.last_upload["aircraft_success"])
+        self.assertFalse(runtime.last_upload["mesh_success"])
 
     def test_window_not_yet_elapsed_is_a_noop(self):
         state = self._state()
@@ -110,18 +144,29 @@ class TestFlushRetention(support.TempConfig):
         self.assertEqual(runtime.last_upload["aircraft_count"], 2)
 
     @staticmethod
-    def _record_failure(aircraft, mesh, api_key, url):
+    def _record_failure(aircraft, mesh, api_key, **urls):
         runtime.last_upload = {
             "timestamp": 1700000000.0, "aircraft_count": len(aircraft),
-            "mesh_count": len(mesh), "success": False,
+            "mesh_count": len(mesh), "aircraft_success": True,
+            "mesh_success": False, "success": False,
         }
-        return False
+        return MESH_REJECTED
 
     def test_snapshot_is_written_before_upload(self):
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=True):
+        with mock.patch.object(service, "upload_records", return_value=DISPATCHED):
             service.do_flush(state, force=True)
         self.assertEqual(len(list(config.SNAPSHOT_DIR.glob("upload_*.json"))), 1)
+
+    def test_the_snapshot_records_what_was_sent(self):
+        state = self._state()
+        sent = {}
+        with mock.patch.object(service, "upload_records",
+                               side_effect=lambda ac, mesh, key, **kw: sent.update(mesh=mesh)
+                               or DISPATCHED):
+            service.do_flush(state, force=True)
+        snapshot = json.loads(next(config.SNAPSHOT_DIR.glob("upload_*.json")).read_text())
+        self.assertEqual(snapshot["meshcore_nodes"], sent["mesh"])
 
 
 class TestPoll(support.TempConfig):

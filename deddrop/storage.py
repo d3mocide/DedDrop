@@ -22,8 +22,13 @@ _LAST_UPLOAD_FIELDS = {
     "mesh_count": int,
     "aircraft_imported": int,
     "aircraft_seen": int,
+    "aircraft_rejected": int,
     "mesh_imported": int,
     "mesh_seen": int,
+    "mesh_rejected": int,
+    "mesh_reject_reasons": dict,
+    "aircraft_success": bool,
+    "mesh_success": bool,
     "success": bool,
     "dry_run": bool,
 }

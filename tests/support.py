@@ -5,6 +5,7 @@ imports this first to pin config at safe temp paths before that happens.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -31,6 +32,24 @@ def quiet_logs():
 
 def restore_logs():
     logging.disable(logging.NOTSET)
+
+
+class FakeResponse:
+    """Stands in for the object urlopen() yields, reusable across calls."""
+
+    def __init__(self, payload, status=200):
+        self._body = json.dumps(payload).encode()
+        self.status = status
+        self.headers = {}
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class RuntimeIsolated(unittest.TestCase):

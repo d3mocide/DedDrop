@@ -17,6 +17,7 @@ services:
       WDGWARS_API_KEY: ${WDGWARS_API_KEY}
       # ── Endpoints ──
       WDGWARS_API_URL: ${WDGWARS_API_URL:-https://wdgwars.pl/endpoint/upload/}
+      WDGWARS_MESH_API_URL: ${WDGWARS_MESH_API_URL:-}
       WDGWARS_ME_URL: ${WDGWARS_ME_URL:-https://wdgwars.pl/api/me}
       MESHMAPPER_API_KEY: ${MESHMAPPER_API_KEY:-}
       # ── Timing ──

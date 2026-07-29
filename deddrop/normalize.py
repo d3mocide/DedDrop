@@ -174,6 +174,38 @@ def normalize_mesh_ping(ping: dict) -> list[dict]:
     return records
 
 
+# WDGWars gates every mesh node on this shape before storing it, and reports
+# the misses only afterwards, as meshcore_reject_reasons: {"bad_node_id": n}.
+# Confirmed against wdgwars.pl by the reference feeder, Heimdall
+# (Yggdrasil-AI-labs/meshcore-to-wdgwars, 2026-07-03).
+_SERVER_NODE_ID_GATE = re.compile(r"^[0-9a-f]{8,16}$")
+
+
+def predict_rejections(records: list[dict]) -> list[str]:
+    """Mirror the server's per-record gates so a refusal is explained up front.
+
+    MeshMapper only ever exposes a 2-6 hex tail of a node's public key, which
+    is under the server's 8-hex floor, so nothing here is fixable by reshaping
+    the record — saying so beats leaving a rejected count as the only clue.
+    """
+    warnings = []
+
+    short = [r for r in records if not _SERVER_NODE_ID_GATE.match(r.get("node_id") or "")]
+    if short:
+        warnings.append(
+            f"{len(short)} of {len(records)} mesh node_ids are outside the 8-16 lowercase "
+            f"hex range WDGWars requires and will come back as bad_node_id. MeshMapper "
+            f"exports only carry a 2-6 hex tail of the node's public key, so this cannot "
+            f"be fixed from here — the full key never reaches DedDrop.")
+
+    no_gps = [r for r in records if not r.get("lat") and not r.get("lon")]
+    if no_gps:
+        warnings.append(f"{len(no_gps)} of {len(records)} mesh nodes have no GPS fix "
+                        f"(lat/lon 0,0) and will come back as no_gps.")
+
+    return warnings
+
+
 def merge_mesh_records(mesh_acc: dict[str, dict], new_records: list[dict]) -> None:
     for rec in new_records:
         node_id = rec["node_id"]
