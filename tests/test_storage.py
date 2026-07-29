@@ -54,6 +54,51 @@ class TestState(support.TempConfig):
         self.state_file.write_text(json.dumps({"window_start": time.time() + 999999}))
         self.assertLessEqual(storage.load_state()["window_start"], time.time() + 1)
 
+    def test_last_upload_survives_a_restart(self):
+        """The dashboard must still show the last dispatch after a restart."""
+        runtime.last_upload = {
+            "timestamp": 1700000000.0, "aircraft_count": 42, "mesh_count": 0,
+            "aircraft_imported": 12, "aircraft_seen": 30, "mesh_imported": 0,
+            "mesh_seen": 0, "success": True, "dry_run": False,
+        }
+        storage.save_state(runtime.default_state())
+
+        runtime.last_upload = {}
+        storage.load_state()
+        self.assertEqual(runtime.last_upload["aircraft_count"], 42)
+        self.assertEqual(runtime.last_upload["aircraft_imported"], 12)
+        self.assertEqual(runtime.last_upload["timestamp"], 1700000000.0)
+        self.assertTrue(runtime.last_upload["success"])
+
+    def test_last_upload_is_absent_before_any_dispatch(self):
+        storage.save_state(runtime.default_state())
+        storage.load_state()
+        self.assertEqual(runtime.last_upload, {})
+
+    def test_malformed_last_upload_is_discarded(self):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(json.dumps({"last_upload": {"aircraft_count": 5}}))
+        storage.load_state()
+        self.assertEqual(runtime.last_upload, {})
+
+        self.state_file.write_text(json.dumps({"last_upload": "nope"}))
+        storage.load_state()
+        self.assertEqual(runtime.last_upload, {})
+
+    def test_bad_last_upload_field_does_not_lose_the_summary(self):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(json.dumps({
+            "last_upload": {"timestamp": 1700000000.0, "aircraft_count": "many"},
+        }))
+        storage.load_state()
+        self.assertEqual(runtime.last_upload["timestamp"], 1700000000.0)
+        self.assertNotIn("aircraft_count", runtime.last_upload)
+
+    def test_last_upload_does_not_leak_into_state(self):
+        runtime.last_upload = {"timestamp": 1700000000.0}
+        storage.save_state(runtime.default_state())
+        self.assertNotIn("last_upload", storage.load_state())
+
     def test_concurrent_saves_never_corrupt_the_file(self):
         """Every writer must use its own temp file."""
         state = runtime.default_state()

@@ -3,7 +3,7 @@ import unittest
 from unittest import mock
 
 import support
-from deddrop import config, runtime, service
+from deddrop import config, runtime, service, storage
 
 setUpModule = support.quiet_logs
 tearDownModule = support.restore_logs
@@ -81,6 +81,41 @@ class TestFlushRetention(support.TempConfig):
             up.assert_not_called()
         self.assertEqual(state["poll_count"], 0)
         self.assertGreater(state["window_start"], 0)
+
+    def test_dispatch_summary_survives_a_restart(self):
+        """The dashboard reads the summary from memory; a restart must refill it."""
+        state = self._state()
+        with mock.patch.object(config, "DRY_RUN", True):
+            self.assertTrue(service.do_flush(state, force=True))
+        self.assertEqual(runtime.last_upload["aircraft_count"], 2)
+
+        runtime.reset()  # process restart
+        self.assertEqual(runtime.last_upload, {})
+        service_state = storage.load_state()
+
+        self.assertEqual(runtime.last_upload["aircraft_count"], 2)
+        self.assertEqual(runtime.last_upload["mesh_count"], 1)
+        self.assertTrue(runtime.last_upload["success"])
+        self.assertEqual(service_state["accumulator"], {})  # window was flushed
+
+    def test_failed_dispatch_summary_is_persisted_immediately(self):
+        """A restart before the next poll must still report the failure."""
+        state = self._state()
+        with mock.patch.object(service, "upload_records", side_effect=self._record_failure):
+            self.assertFalse(service.do_flush(state, force=True))
+
+        runtime.reset()
+        storage.load_state()
+        self.assertFalse(runtime.last_upload["success"])
+        self.assertEqual(runtime.last_upload["aircraft_count"], 2)
+
+    @staticmethod
+    def _record_failure(aircraft, mesh, api_key, url):
+        runtime.last_upload = {
+            "timestamp": 1700000000.0, "aircraft_count": len(aircraft),
+            "mesh_count": len(mesh), "success": False,
+        }
+        return False
 
     def test_snapshot_is_written_before_upload(self):
         state = self._state()

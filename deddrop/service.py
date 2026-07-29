@@ -115,6 +115,9 @@ def do_flush(state: dict, *, force: bool = False) -> bool:
         runtime.next_flush_attempt = time.time() + config.RETRY_INTERVAL_MINUTES * 60
         log.warning("flush unsuccessful — window retained, next attempt in %.0f min",
                     config.RETRY_INTERVAL_MINUTES)
+        # The window is unchanged, but the failed result is worth persisting so a
+        # restart before the next poll still reports it.
+        storage.save_state(state)
         return False
 
     runtime.next_flush_attempt = 0.0

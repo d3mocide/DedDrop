@@ -54,9 +54,18 @@ export async function refreshStatus() {
             `${fmtNum(up.aircraft_count || 0)} sent / ${fmtNum(up.aircraft_imported || 0)} new`);
     setText('last-mesh-info',
             `${fmtNum(up.mesh_count || 0)} sent / ${fmtNum(up.mesh_imported || 0)} new`);
-    setText('last-upload-time',
-            up.timestamp ? new Date(up.timestamp * 1000).toLocaleTimeString() : 'Never');
+    setText('last-upload-time', dispatchedAt(up));
   }
+}
+
+// The summary survives restarts, so a dispatch from a previous day needs its
+// date; a failed one needs saying so, or the counts above read as accepted.
+function dispatchedAt(up) {
+  if (!up.timestamp) return 'Never';
+  const when = new Date(up.timestamp * 1000);
+  const sameDay = when.toDateString() === new Date().toDateString();
+  const stamp = sameDay ? when.toLocaleTimeString() : when.toLocaleString();
+  return up.success === false ? `${stamp} (failed)` : stamp;
 }
 
 export async function refreshUserStats() {
