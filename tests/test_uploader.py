@@ -27,75 +27,234 @@ class TestEnvelope(unittest.TestCase):
         self.assertNotEqual(env["nonce"], uploader.build_envelope(payload, key)["nonce"])
 
 
+class TestMeshWireRecord(unittest.TestCase):
+    """WDGWars stores mesh positions as latitude/longitude, not lat/lon."""
+
+    RECORD = {"node_id": "aabb", "node_type": "REPEATER", "name": "aabb",
+              "lat": 52.1, "lon": 21.0, "rssi": -95, "type": "MESHCORE"}
+
+    def test_position_is_sent_under_both_spellings(self):
+        wire = uploader.mesh_wire_record(self.RECORD)
+        self.assertEqual(wire["latitude"], 52.1)
+        self.assertEqual(wire["longitude"], 21.0)
+        self.assertEqual(wire["lat"], 52.1)
+        self.assertEqual(wire["lon"], 21.0)
+
+    def test_other_fields_survive(self):
+        wire = uploader.mesh_wire_record(self.RECORD)
+        self.assertEqual(wire["node_id"], "aabb")
+        self.assertEqual(wire["rssi"], -95)
+
+    def test_is_idempotent(self):
+        once = uploader.mesh_wire_record(self.RECORD)
+        self.assertEqual(uploader.mesh_wire_record(once), once)
+
+    def test_missing_position_stays_missing(self):
+        wire = uploader.mesh_wire_record({"node_id": "aabb"})
+        self.assertIsNone(wire["latitude"])
+        self.assertIsNone(wire["lat"])
+
+
+class TestFeedSeparation(support.RuntimeIsolated):
+    """Aircraft and mesh nodes must travel as separate requests."""
+
+    def test_each_feed_gets_its_own_request_and_url(self):
+        sent = []
+
+        def fake_send(feed, chunk, key, url):
+            sent.append((feed.name, len(chunk), url))
+            return True, {feed.imported[0]: len(chunk)}
+
+        with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            result = uploader.upload_records(
+                [{"icao": "A"}], [{"node_id": "n"}], "k",
+                aircraft_url="http://ac", mesh_url="http://mesh")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(sent, [("aircraft", 1, "http://ac"), ("mesh", 1, "http://mesh")])
+
+    def test_a_chunk_never_mixes_feeds(self):
+        """The payload key a chunk lands under decides how WDGWars stores it."""
+        payloads = []
+
+        def fake_urlopen(req, timeout=None):
+            envelope = json.loads(req.data)
+            payloads.append(json.loads(base64.b64decode(envelope["data"])))
+            return support.FakeResponse({"ok": True, "imported": 1})
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(config, "DRY_RUN", False), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            uploader.upload_records([{"icao": "A"}], [{"node_id": "n", "lat": 1, "lon": 2}], "k",
+                                    aircraft_url="http://ac", mesh_url="http://mesh")
+
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(len(payloads[0]["aircraft"]), 1)
+        self.assertEqual(payloads[0]["meshcore_nodes"], [])
+        self.assertEqual(payloads[1]["aircraft"], [])
+        self.assertEqual(payloads[1]["meshcore_nodes"][0]["latitude"], 1)
+
+    def test_mesh_records_are_converted_to_the_wire_schema(self):
+        sent = {}
+
+        def fake_send(feed, chunk, key, url):
+            sent[feed.name] = chunk
+            return True, {feed.imported[0]: len(chunk)}
+
+        with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            uploader.upload_records([], [{"node_id": "n", "lat": 52.1, "lon": 21.0}], "k",
+                                    aircraft_url="http://ac", mesh_url="http://mesh")
+
+        self.assertEqual(sent["mesh"][0]["latitude"], 52.1)
+
+    def test_a_failed_mesh_dispatch_leaves_aircraft_successful(self):
+        def fake_send(feed, chunk, key, url):
+            return (feed.name == "aircraft"), {feed.imported[0]: len(chunk)}
+
+        with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            result = uploader.upload_records([{"icao": "A"}], [{"node_id": "n"}], "k",
+                                             aircraft_url="http://ac", mesh_url="http://mesh")
+
+        self.assertTrue(result.aircraft_ok)
+        self.assertFalse(result.mesh_ok)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_feeds(), ["mesh"])
+
+    def test_aircraft_counters_cannot_vouch_for_mesh(self):
+        """The bug this split exists to prevent: a mesh-free response reading OK."""
+        response = {"ok": True, "aircraft_imported": 24, "aircraft_already_seen": 7}
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(response)), \
+             mock.patch.object(config, "DRY_RUN", False), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            result = uploader.upload_records([{"icao": "A"}], [{"node_id": "n"}], "k",
+                                             aircraft_url="http://ac", mesh_url="http://mesh")
+        self.assertTrue(result.aircraft_ok)
+        self.assertFalse(result.mesh_ok)
+
+    def test_a_feed_with_no_records_is_not_dispatched(self):
+        with mock.patch.object(uploader, "send_chunk",
+                               return_value=(True, {"imported": 1})) as send:
+            uploader.upload_records([{"icao": "A"}], [], "k",
+                                    aircraft_url="http://ac", mesh_url="http://mesh")
+        self.assertEqual([c.args[0].name for c in send.call_args_list], ["aircraft"])
+
+
 class TestUploadChunking(support.RuntimeIsolated):
     def test_every_record_is_sent_exactly_once(self):
         aircraft = [{"icao": f"{i:06X}"} for i in range(1200)]
         mesh = [{"node_id": f"n{i}"} for i in range(100)]
-        sent_ac, sent_mesh = [], []
+        sent = {"aircraft": [], "mesh": []}
 
-        def fake_send(ac_chunk, mesh_chunk, key, url):
-            self.assertLessEqual(len(ac_chunk), config.BATCH_SIZE)
-            self.assertLessEqual(len(mesh_chunk), config.BATCH_SIZE)
-            sent_ac.extend(ac_chunk)
-            sent_mesh.extend(mesh_chunk)
-            return True, {"aircraft_imported": len(ac_chunk)}
+        def fake_send(feed, chunk, key, url):
+            self.assertLessEqual(len(chunk), config.BATCH_SIZE)
+            sent[feed.name].extend(chunk)
+            return True, {feed.imported[0]: len(chunk)}
 
         with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
              mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
-            self.assertTrue(uploader.upload_records(aircraft, mesh, "k", "http://x"))
+            self.assertTrue(uploader.upload_records(
+                aircraft, mesh, "k", aircraft_url="http://x", mesh_url="http://x").ok)
 
-        self.assertEqual(len(sent_ac), 1200)
-        self.assertEqual(len(sent_mesh), 100)
-        self.assertEqual(len({a["icao"] for a in sent_ac}), 1200)
+        self.assertEqual(len(sent["aircraft"]), 1200)
+        self.assertEqual(len(sent["mesh"]), 100)
+        self.assertEqual(len({a["icao"] for a in sent["aircraft"]}), 1200)
 
-    def test_one_failed_chunk_fails_the_upload(self):
+    def test_one_failed_chunk_fails_that_feed(self):
         aircraft = [{"icao": f"{i:06X}"} for i in range(1200)]
         results = iter([(True, {}), (False, {}), (True, {})])
         with mock.patch.object(uploader, "send_chunk", side_effect=lambda *a: next(results)), \
              mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
-            self.assertFalse(uploader.upload_records(aircraft, [], "k", "http://x"))
+            result = uploader.upload_records(aircraft, [], "k",
+                                             aircraft_url="http://x", mesh_url="http://x")
+        self.assertFalse(result.aircraft_ok)
+        self.assertTrue(result.mesh_ok)
 
     def test_nothing_to_upload_is_a_success(self):
-        self.assertTrue(uploader.upload_records([], [], "k", "http://x"))
+        self.assertTrue(uploader.upload_records(
+            [], [], "k", aircraft_url="http://x", mesh_url="http://x").ok)
 
     def test_shutdown_aborts_remaining_chunks(self):
         """SIGTERM must not wait for every chunk to be sent."""
         aircraft = [{"icao": f"{i:06X}"} for i in range(2000)]
         calls = []
 
-        def fake_send(ac_chunk, mesh_chunk, key, url):
-            calls.append(len(ac_chunk))
+        def fake_send(feed, chunk, key, url):
+            calls.append(feed.name)
             runtime.shutdown.set()
             return True, {}
 
         with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
              mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
-            self.assertFalse(uploader.upload_records(aircraft, [], "k", "http://x"))
-        self.assertEqual(len(calls), 1)
+            result = uploader.upload_records(aircraft, [{"node_id": "n"}], "k",
+                                             aircraft_url="http://x", mesh_url="http://x")
+        self.assertFalse(result.ok)
+        # The mesh feed is never started, so its window is retained rather than
+        # half-sent during shutdown.
+        self.assertEqual(calls, ["aircraft"])
+        self.assertFalse(result.mesh_ok)
 
     def test_last_upload_summary_is_recorded(self):
         with mock.patch.object(uploader, "send_chunk",
                                return_value=(True, {"aircraft_imported": 2})), \
              mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
-            uploader.upload_records([{"icao": "A"}, {"icao": "B"}], [], "k", "http://x")
+            uploader.upload_records([{"icao": "A"}, {"icao": "B"}], [], "k",
+                                    aircraft_url="http://x", mesh_url="http://x")
         self.assertEqual(runtime.last_upload["aircraft_count"], 2)
         self.assertTrue(runtime.last_upload["success"])
+        self.assertTrue(runtime.last_upload["aircraft_success"])
+        self.assertTrue(runtime.last_upload["mesh_success"])
+
+    def test_per_feed_outcome_is_recorded(self):
+        def fake_send(feed, chunk, key, url):
+            return (feed.name == "aircraft"), {feed.imported[0]: len(chunk)}
+
+        with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            uploader.upload_records([{"icao": "A"}], [{"node_id": "n"}], "k",
+                                    aircraft_url="http://x", mesh_url="http://x")
+        self.assertTrue(runtime.last_upload["aircraft_success"])
+        self.assertFalse(runtime.last_upload["mesh_success"])
+        self.assertFalse(runtime.last_upload["success"])
 
 
 class TestSendChunk(support.RuntimeIsolated):
     def test_dry_run_does_not_hit_the_network(self):
         with mock.patch.object(config, "DRY_RUN", True), \
              mock.patch("urllib.request.urlopen") as urlopen:
-            ok, data = uploader.send_chunk([{"icao": "A"}], [], "k", "http://x")
+            ok, data = uploader.send_chunk(uploader.AIRCRAFT_FEED, [{"icao": "A"}],
+                                           "k", "http://x")
             urlopen.assert_not_called()
         self.assertTrue(ok)
         self.assertTrue(data["dry_run"])
+
+    def test_a_zero_counter_response_is_a_failure(self):
+        """A 200 that stored nothing must retain the window, not clear it."""
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse({"ok": True})), \
+             mock.patch.object(config, "DRY_RUN", False):
+            ok, _ = uploader.send_chunk(uploader.MESH_FEED, [{"node_id": "n"}], "k", "http://x")
+        self.assertFalse(ok)
+
+    def test_meshcore_counters_acknowledge_a_mesh_chunk(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(
+                            {"ok": True, "meshcore_imported": 3})), \
+             mock.patch.object(config, "DRY_RUN", False):
+            ok, data = uploader.send_chunk(uploader.MESH_FEED, [{"node_id": "n"}],
+                                           "k", "http://x")
+        self.assertTrue(ok)
+        self.assertEqual(uploader._counter(data, uploader.MESH_FEED.imported), 3)
 
     def test_413_is_not_retried(self):
         err = urllib.error.HTTPError("http://x", 413, "too big", {}, None)
         with mock.patch("urllib.request.urlopen", side_effect=err) as urlopen, \
              mock.patch.object(config, "DRY_RUN", False):
-            ok, _ = uploader.send_chunk([{"icao": "A"}], [], "k", "http://x")
+            ok, _ = uploader.send_chunk(uploader.AIRCRAFT_FEED, [{"icao": "A"}],
+                                        "k", "http://x")
         self.assertFalse(ok)
         self.assertEqual(urlopen.call_count, 1)
 
@@ -105,7 +264,8 @@ class TestSendChunk(support.RuntimeIsolated):
              mock.patch.object(config, "DRY_RUN", False), \
              mock.patch.object(config, "MAX_ATTEMPTS", 3), \
              mock.patch.object(config, "BACKOFF_BASE_S", 0):
-            ok, _ = uploader.send_chunk([{"icao": "A"}], [], "k", "http://x")
+            ok, _ = uploader.send_chunk(uploader.AIRCRAFT_FEED, [{"icao": "A"}],
+                                        "k", "http://x")
         self.assertFalse(ok)
         self.assertEqual(urlopen.call_count, 3)
 
@@ -120,7 +280,8 @@ class TestSendChunk(support.RuntimeIsolated):
              mock.patch.object(config, "DRY_RUN", False), \
              mock.patch.object(config, "MAX_ATTEMPTS", 5), \
              mock.patch.object(config, "BACKOFF_BASE_S", 0):
-            ok, _ = uploader.send_chunk([{"icao": "A"}], [], "k", "http://x")
+            ok, _ = uploader.send_chunk(uploader.AIRCRAFT_FEED, [{"icao": "A"}],
+                                        "k", "http://x")
         self.assertFalse(ok)
         self.assertEqual(urlopen.call_count, 1)
 

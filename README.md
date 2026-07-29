@@ -40,7 +40,8 @@
 
 | Variable | Default | Description |
 |---|---|---|
-| `WDGWARS_API_URL` | `https://wdgwars.pl/endpoint/upload/` | Upload endpoint for signed batches |
+| `WDGWARS_API_URL` | `https://wdgwars.pl/endpoint/upload/` | Upload endpoint for signed aircraft batches |
+| `WDGWARS_MESH_API_URL` | *(same as `WDGWARS_API_URL`)* | Upload endpoint for signed mesh batches, if it differs |
 | `WDGWARS_ME_URL` | `https://wdgwars.pl/api/me` | Profile/stats endpoint used by the dashboard |
 | `MESHMAPPER_API_KEY` | `WDGWARS_API_KEY` | Optional separate API key for MeshMapper ingest |
 
@@ -153,11 +154,30 @@ Content-Type: application/json
 }
 ```
 
+Each payload carries `networks`, `aircraft`, and `meshcore_nodes`, but only one of
+them ever holds records:
+
+- **Separate dispatches per feed**: aircraft go to `WDGWARS_API_URL` and mesh nodes
+  to `WDGWARS_MESH_API_URL` as independent requests. Bundled, they shared one
+  response — non-zero aircraft counters made the batch read as accepted even when
+  every mesh node in it was discarded, so mesh data vanished with no error anywhere.
+  Split, each response is judged on its own counters (`aircraft_imported` /
+  `meshcore_imported` and friends), and a feed that reports nothing back is treated
+  as a failure rather than a success.
+- **Independent retention**: if one feed fails, only that feed's records are
+  retained and retried; the one that landed is cleared instead of being re-sent.
+  The dashboard names which feed is pending.
+- **Mesh position keys**: `GET /api/meshcore` spells the position
+  `latitude`/`longitude` while aircraft use `lat`/`lon`, so mesh nodes are sent
+  with both spellings carrying the same value. A node sent under `lat`/`lon` alone
+  was accepted with HTTP 200 and then dropped for having no position.
 - **Fault Tolerance**: Chunks are retried with exponential backoff on HTTP 429 and
   5xx responses, honouring `Retry-After` when present. HTTP 413 is not retried —
-  lower `BATCH_SIZE` instead. If any chunk ultimately fails, the whole window is
-  retained and retried after `RETRY_INTERVAL_MINUTES`.
-- **Audit Trail**: Every upload saves an exact snapshot to `/data/snapshots/upload_<timestamp>.json`.
+  lower `BATCH_SIZE` instead. If any chunk of a feed ultimately fails, that feed's
+  window is retained and retried after `RETRY_INTERVAL_MINUTES`.
+- **Audit Trail**: Every upload saves an exact snapshot to
+  `/data/snapshots/upload_<timestamp>.json`, holding the records in the form they
+  were sent.
 - **Unknown telemetry is `null`**: an aircraft with no reported ground speed or track
   sends `null` rather than `0`, so "not received" stays distinct from "zero".
 

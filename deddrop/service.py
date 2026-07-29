@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from . import config, runtime, storage
 from .config import log
 from .normalize import fetch_aircraft_json, merge_into, parse_snapshot
-from .uploader import upload_records, validate_api_key
+from .uploader import mesh_wire_record, upload_records, validate_api_key
 from .webapp import start_web_server
 
 
@@ -102,19 +102,33 @@ def do_flush(state: dict, *, force: bool = False) -> bool:
     log.info("upload window elapsed (%.2fh, %d polls) — flushing %d aircraft, %d mesh nodes",
              elapsed_h, poll_count, len(aircraft), len(mesh))
 
+    # The snapshot is the record of what was sent, so it holds the same wire
+    # form the mesh feed is dispatched in.
+    mesh_payload = [mesh_wire_record(rec) for rec in mesh]
+
     try:
-        path = storage.save_snapshot(aircraft, mesh, window_start, window_end,
+        path = storage.save_snapshot(aircraft, mesh_payload, window_start, window_end,
                                      poll_count, config.SNAPSHOT_DIR)
         log.info("saved snapshot %s", path.name)
     except OSError as e:
         log.error("could not write snapshot: %s", e)
 
-    if not upload_records(aircraft, mesh, config.API_KEY, config.UPLOAD_URL):
-        # Retain everything and leave the window open so the next attempt
-        # re-sends this data rather than discarding it.
+    result = upload_records(aircraft, mesh_payload, config.API_KEY,
+                            aircraft_url=config.UPLOAD_URL,
+                            mesh_url=config.MESH_UPLOAD_URL)
+
+    if not result.ok:
+        # Each feed is dispatched separately, so only the ones that failed are
+        # retained; whatever landed is dropped rather than re-sent next attempt.
+        # The window stays open either way, so the retry covers what is left.
         runtime.next_flush_attempt = time.time() + config.RETRY_INTERVAL_MINUTES * 60
-        log.warning("flush unsuccessful — window retained, next attempt in %.0f min",
-                    config.RETRY_INTERVAL_MINUTES)
+        with runtime.lock:
+            if result.aircraft_ok:
+                _drop_uploaded(state["accumulator"], aircraft_items)
+            if result.mesh_ok:
+                _drop_uploaded(state["mesh_accumulator"], mesh_items)
+        log.warning("flush unsuccessful for %s — window retained, next attempt in %.0f min",
+                    " and ".join(result.failed_feeds()), config.RETRY_INTERVAL_MINUTES)
         # The window is unchanged, but the failed result is worth persisting so a
         # restart before the next poll still reports it.
         storage.save_state(state)
@@ -196,11 +210,11 @@ def main() -> int:
     if not preflight_storage():
         return 2
 
-    log.info("%s v%s starting — feed=%s upload_url=%s poll=%gs upload_every=%gh "
-             "dry_run=%s web=%s:%d",
+    log.info("%s v%s starting — feed=%s upload_url=%s mesh_upload_url=%s poll=%gs "
+             "upload_every=%gh dry_run=%s web=%s:%d",
              config.TOOL_NAME, config.TOOL_VERSION, config.TAR1090_URL, config.UPLOAD_URL,
-             config.POLL_INTERVAL_SECONDS, config.UPLOAD_INTERVAL_HOURS, config.DRY_RUN,
-             config.WEB_BIND, config.WEB_PORT)
+             config.MESH_UPLOAD_URL, config.POLL_INTERVAL_SECONDS,
+             config.UPLOAD_INTERVAL_HOURS, config.DRY_RUN, config.WEB_BIND, config.WEB_PORT)
 
     validate_api_key()
 

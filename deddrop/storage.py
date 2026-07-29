@@ -24,6 +24,8 @@ _LAST_UPLOAD_FIELDS = {
     "aircraft_seen": int,
     "mesh_imported": int,
     "mesh_seen": int,
+    "aircraft_success": bool,
+    "mesh_success": bool,
     "success": bool,
     "dry_run": bool,
 }

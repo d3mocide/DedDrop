@@ -43,22 +43,39 @@ export async function refreshStatus() {
   if (data.retry_pending_in > 0) {
     retry.classList.add('visible');
     // innerText would print the markup, and the message is built from a number
-    // this module computed, so there is nothing untrusted to escape here.
+    // and a fixed label this module computed, so there is nothing untrusted to
+    // escape here.
     retry.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>` +
-                      `<span>Last dispatch failed — window retained, retrying in ` +
-                      `${Math.ceil(data.retry_pending_in / 60)} min</span>`;
+                      `<span>${failedFeeds(data.last_upload)} dispatch failed — window ` +
+                      `retained, retrying in ${Math.ceil(data.retry_pending_in / 60)} min</span>`;
   } else {
     retry.classList.remove('visible');
   }
 
   const up = data.last_upload;
   if (up && Object.keys(up).length) {
-    setText('last-ac-info',
-            `${fmtNum(up.aircraft_count || 0)} sent / ${fmtNum(up.aircraft_imported || 0)} new`);
-    setText('last-mesh-info',
-            `${fmtNum(up.mesh_count || 0)} sent / ${fmtNum(up.mesh_imported || 0)} new`);
+    // Each feed is dispatched on its own, so one can fail while the other
+    // lands; saying which is what makes "28 sent / 0 new" readable.
+    setText('last-ac-info', feedResult(up.aircraft_count, up.aircraft_imported,
+                                       up.aircraft_success));
+    setText('last-mesh-info', feedResult(up.mesh_count, up.mesh_imported, up.mesh_success));
     setText('last-upload-time', dispatchedAt(up));
   }
+}
+
+function feedResult(count, imported, success) {
+  const line = `${fmtNum(count || 0)} sent / ${fmtNum(imported || 0)} new`;
+  return success === false ? `${line} — rejected` : line;
+}
+
+// Which feed the pending retry is for. Older summaries carry only the combined
+// flag, so fall back to the unqualified wording rather than naming the wrong one.
+function failedFeeds(up) {
+  if (!up || up.aircraft_success === undefined || up.mesh_success === undefined) return 'Last';
+  const failed = [];
+  if (up.aircraft_success === false) failed.push('Aircraft');
+  if (up.mesh_success === false) failed.push('Mesh');
+  return failed.length ? failed.join(' and ') : 'Last';
 }
 
 // The summary survives restarts, so a dispatch from a previous day needs its
