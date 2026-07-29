@@ -167,10 +167,13 @@ them ever holds records:
 - **Independent retention**: if one feed fails, only that feed's records are
   retained and retried; the one that landed is cleared instead of being re-sent.
   The dashboard names which feed is pending.
-- **Mesh position keys**: `GET /api/meshcore` spells the position
-  `latitude`/`longitude` while aircraft use `lat`/`lon`, so mesh nodes are sent
-  with both spellings carrying the same value. A node sent under `lat`/`lon` alone
-  was accepted with HTTP 200 and then dropped for having no position.
+- **A refusal is a verdict, not a failure**: records WDGWars itemises in
+  `meshcore_reject_reasons` are counted as delivered and cleared. Re-sending what
+  the server has explicitly refused would retry forever.
+- **Rejections are predicted before they happen**: WDGWars' per-record gates are
+  mirrored client-side, so the log says which nodes will be refused and why
+  rather than leaving a rejected count as the only clue. See
+  [Mesh nodes and `bad_node_id`](#mesh-nodes-and-bad_node_id).
 - **Fault Tolerance**: Chunks are retried with exponential backoff on HTTP 429 and
   5xx responses, honouring `Retry-After` when present. HTTP 413 is not retried —
   lower `BATCH_SIZE` instead. If any chunk of a feed ultimately fails, that feed's
@@ -256,3 +259,25 @@ in `docker compose logs deddrop`:
 **`poll rejected all N aircraft in the feed`.** `TAR1090_URL` is reachable but isn't
 returning tar1090-shaped JSON, or the receiver has no position data. Confirm the URL
 ends in `/data/aircraft.json`.
+
+### Mesh nodes and `bad_node_id`
+
+**Mesh nodes upload cleanly but your WDGWars profile still shows 0.** DedDrop sends
+the confirmed meshcore wire shape (`node_id, node_type, name, lat, lon, rssi,
+first_seen, type`), but WDGWars gates every node on `node_id` being **8-16 lowercase
+hex** before storing it. MeshMapper only ever exposes a **2-6 hex tail** of a node's
+public key, so most captures miss that floor and come back as
+`meshcore_reject_reasons: {"bad_node_id": n}`.
+
+This is not fixable from here — the full key never reaches DedDrop, and there is
+nothing to pad a short ID with. DedDrop names the problem rather than hiding it: the
+flush log warns before uploading, the dispatch panel shows `n refused (bad_node_id)`,
+and those records are cleared rather than retried forever.
+
+The gate is documented by the reference feeder,
+[Heimdall](https://github.com/Yggdrasil-AI-labs/meshcore-to-wdgwars), which confirmed
+it against wdgwars.pl on 2026-07-03. Two others are worth knowing: a node at `lat/lon
+0,0` is refused as `no_gps` (DedDrop already drops those at ingest), and `node_type`
+no longer rejects — it coerces to `Unknown` server-side.
+
+A capture source that does expose full-length node IDs passes untouched.

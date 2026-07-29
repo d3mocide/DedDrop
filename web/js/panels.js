@@ -57,15 +57,22 @@ export async function refreshStatus() {
     // Each feed is dispatched on its own, so one can fail while the other
     // lands; saying which is what makes "28 sent / 0 new" readable.
     setText('last-ac-info', feedResult(up.aircraft_count, up.aircraft_imported,
-                                       up.aircraft_success));
-    setText('last-mesh-info', feedResult(up.mesh_count, up.mesh_imported, up.mesh_success));
+                                       up.aircraft_success, up.aircraft_rejected));
+    setText('last-mesh-info', feedResult(up.mesh_count, up.mesh_imported, up.mesh_success,
+                                         up.mesh_rejected, up.mesh_reject_reasons));
     setText('last-upload-time', dispatchedAt(up));
   }
 }
 
-function feedResult(count, imported, success) {
-  const line = `${fmtNum(count || 0)} sent / ${fmtNum(imported || 0)} new`;
-  return success === false ? `${line} — rejected` : line;
+// "28 sent / 0 new" on its own reads as a mystery. A refusal WDGWars itemised
+// is the answer, so it goes on the same line.
+function feedResult(count, imported, success, rejected, reasons) {
+  let line = `${fmtNum(count || 0)} sent / ${fmtNum(imported || 0)} new`;
+  if (rejected) {
+    const why = Object.keys(reasons || {}).join(', ');
+    line += ` / ${fmtNum(rejected)} refused${why ? ` (${why})` : ''}`;
+  }
+  return success === false ? `${line} — not delivered` : line;
 }
 
 // Which feed the pending retry is for. Older summaries carry only the combined

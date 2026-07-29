@@ -121,6 +121,46 @@ class TestNormalizeMesh(unittest.TestCase):
         normalize.merge_mesh_records(acc, [{"node_id": "n", "first_seen": "t2"}])
         self.assertEqual(acc["n"]["first_seen"], "t1")
 
+    def test_records_match_the_confirmed_meshcore_wire_shape(self):
+        """node_id, node_type, name, lat, lon, rssi, first_seen, type."""
+        rec = normalize.normalize_mesh_ping({
+            "type": "DISC", "lat": 52.1, "lon": 21.0,
+            "repeater_id": "0CE8", "node_type": "R", "local_rssi": "-67"})[0]
+        self.assertEqual(set(rec), {"node_id", "node_type", "name", "lat", "lon",
+                                    "rssi", "first_seen", "type"})
+        # The role goes in node_type; `type` is the constant envelope marker.
+        # Swapping the two is accepted with meshcore_imported: 0.
+        self.assertEqual(rec["type"], "MESHCORE")
+        self.assertEqual(rec["node_type"], "REPEATER")
+        # The server gates on lowercase hex; MeshMapper exports are uppercase.
+        self.assertEqual(rec["node_id"], "0ce8")
+        self.assertRegex(rec["first_seen"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+class TestPredictRejections(unittest.TestCase):
+    """WDGWars' gates, mirrored so a refusal is explained before it happens."""
+
+    def test_short_node_ids_are_flagged(self):
+        warnings = normalize.predict_rejections([{"node_id": "0ce8", "lat": 1, "lon": 2}])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("bad_node_id", warnings[0])
+
+    def test_a_full_length_id_passes(self):
+        self.assertEqual(
+            normalize.predict_rejections([{"node_id": "a1b2c3d4", "lat": 1, "lon": 2}]), [])
+
+    def test_uppercase_fails_the_lowercase_gate(self):
+        self.assertTrue(
+            normalize.predict_rejections([{"node_id": "A1B2C3D4", "lat": 1, "lon": 2}]))
+
+    def test_missing_gps_is_flagged(self):
+        warnings = normalize.predict_rejections([{"node_id": "a1b2c3d4", "lat": 0, "lon": 0}])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("no_gps", warnings[0])
+
+    def test_nothing_to_say_about_an_empty_window(self):
+        self.assertEqual(normalize.predict_rejections([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

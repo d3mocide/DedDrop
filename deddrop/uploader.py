@@ -5,6 +5,16 @@ one POST hid mesh-side failures: the response carried non-zero aircraft
 counters, so the batch read as accepted even when every mesh node in it was
 discarded. Sent separately, each feed is judged on its own counters, retried on
 its own, and retained or cleared independently of the other.
+
+The meshcore wire shape and its server-side gates are documented by the
+reference feeder, Heimdall (Yggdrasil-AI-labs/meshcore-to-wdgwars), which
+confirmed them live against wdgwars.pl:
+
+    node_id, node_type, name, lat, lon, rssi, first_seen, type
+
+WDGWars gates each node on a real GPS fix and on ``node_id`` being 8-16
+lowercase hex, silently dropping — or explicitly itemising in
+``meshcore_reject_reasons`` — anything that misses.
 """
 from __future__ import annotations
 
@@ -34,16 +44,20 @@ class Feed(NamedTuple):
     payload_key: str     # key the records travel under in the payload
     imported: tuple      # response keys meaning "stored as new", best first
     seen: tuple          # response keys meaning "already had it", best first
+    rejected: tuple      # response keys meaning "read it and refused it"
+    reasons: tuple       # response keys holding the per-reason breakdown
     extra: tuple = ()    # further keys that still prove the batch was read
 
     @property
     def counters(self) -> tuple:
-        """Every key whose presence proves the server did something with us.
+        """Every key whose presence proves the server gave us a verdict.
 
         A 200 that reports none of them for a non-empty payload means the batch
-        was accepted and then dropped on the floor.
+        was accepted and then dropped on the floor. Rejections count: a refusal
+        is a verdict, and re-sending records the server has already refused
+        would retry forever.
         """
-        return self.imported + self.seen + self.extra + _SHARED_COUNTERS
+        return self.imported + self.seen + self.rejected + self.extra + _SHARED_COUNTERS
 
 
 AIRCRAFT_FEED = Feed(
@@ -51,6 +65,8 @@ AIRCRAFT_FEED = Feed(
     payload_key="aircraft",
     imported=("aircraft_imported", "imported"),
     seen=("aircraft_already_seen", "already_seen"),
+    rejected=("aircraft_rejected", "rejected"),
+    reasons=("aircraft_reject_reasons", "reject_reasons"),
     extra=("merged_samples",),
 )
 
@@ -59,6 +75,8 @@ MESH_FEED = Feed(
     payload_key="meshcore_nodes",
     imported=("meshcore_imported", "mesh_imported", "imported"),
     seen=("meshcore_already_seen", "mesh_already_seen", "already_seen"),
+    rejected=("meshcore_rejected", "mesh_rejected", "rejected"),
+    reasons=("meshcore_reject_reasons", "reject_reasons"),
 )
 
 
@@ -79,26 +97,6 @@ def scrub(text: str, key: str) -> str:
     if key and key in text:
         return text.replace(key, f"{key[:4]}…{key[-4:]}")
     return text
-
-
-def mesh_wire_record(record: dict) -> dict:
-    """Render one accumulated mesh node in the schema WDGWars stores.
-
-    ``GET /api/meshcore`` spells the position ``latitude``/``longitude`` while
-    the accumulator — and the dashboard reading it — uses the short ``lat``/
-    ``lon`` that the aircraft feed wants. Sending only the short pair looked
-    accepted (HTTP 200, ``ok: true``) while the node was dropped for having no
-    position, so both spellings ride along and carry the same value. Idempotent,
-    so the snapshot and the upload can each ask for the wire form.
-    """
-    lat = record.get("latitude", record.get("lat"))
-    lon = record.get("longitude", record.get("lon"))
-    wire = {k: v for k, v in record.items() if k not in ("lat", "lon", "latitude", "longitude")}
-    wire["latitude"] = lat
-    wire["longitude"] = lon
-    wire["lat"] = lat
-    wire["lon"] = lon
-    return wire
 
 
 def build_envelope(payload: dict, api_key: str) -> dict:
@@ -130,6 +128,15 @@ def _counter(data: dict, keys: tuple) -> int:
             except (TypeError, ValueError):
                 return 0
     return 0
+
+
+def _reasons(data: dict, keys: tuple) -> dict:
+    """Read the per-reason rejection breakdown, e.g. {"bad_node_id": 53}."""
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, dict):
+            return {str(k): v for k, v in value.items()}
+    return {}
 
 
 def send_chunk(feed: Feed, chunk: list[dict], api_key: str, url: str) -> tuple[bool, dict]:
@@ -207,9 +214,13 @@ def send_chunk(feed: Feed, chunk: list[dict], api_key: str, url: str) -> tuple[b
     return False, last_response
 
 
+def _new_totals() -> dict:
+    return {"imported": 0, "seen": 0, "rejected": 0, "reasons": {}}
+
+
 def upload_feed(feed: Feed, records: list[dict], api_key: str, url: str) -> tuple[bool, dict]:
-    """Chunk and dispatch one feed. Returns (ok, {"imported": n, "seen": n})."""
-    totals = {"imported": 0, "seen": 0}
+    """Chunk and dispatch one feed. Returns (ok, totals)."""
+    totals = _new_totals()
     if not records:
         return True, totals
 
@@ -233,22 +244,45 @@ def upload_feed(feed: Feed, records: list[dict], api_key: str, url: str) -> tupl
         if chunk_ok:
             totals["imported"] += _counter(data, feed.imported)
             totals["seen"] += _counter(data, feed.seen)
+            totals["rejected"] += _counter(data, feed.rejected)
+            for reason, count in _reasons(data, feed.reasons).items():
+                try:
+                    totals["reasons"][reason] = totals["reasons"].get(reason, 0) + int(count or 0)
+                except (TypeError, ValueError):
+                    totals["reasons"][reason] = totals["reasons"].get(reason, 0)
 
         is_last = idx == n_chunks - 1
         if not is_last and config.CHUNK_COOLDOWN_S > 0 and not config.DRY_RUN:
             if runtime.sleep_interruptible(config.CHUNK_COOLDOWN_S):
                 return False, totals
 
+    if ok:
+        _report_feed(feed, len(records), totals)
     return ok, totals
+
+
+def _report_feed(feed: Feed, sent: int, totals: dict) -> None:
+    """Say what became of a dispatched feed, including what it refused.
+
+    Every record should come back imported, already seen, or rejected. WDGWars
+    has been seen returning all-zero counters for a payload it itemised as
+    rejected moments earlier, so the shortfall is named rather than left to read
+    as a clean upload.
+    """
+    if totals["rejected"]:
+        log.error("WDGWars refused %d of %d %s records: %s", totals["rejected"], sent,
+                  feed.name, totals["reasons"] or "no reason given")
+
+    accounted = totals["imported"] + totals["seen"] + totals["rejected"]
+    if accounted < sent and not config.DRY_RUN:
+        log.warning("WDGWars accounted for %d of the %d %s records sent and gave no "
+                    "verdict on the other %d — those were NOT stored",
+                    accounted, sent, feed.name, sent - accounted)
 
 
 def upload_records(aircraft_records: list[dict], mesh_records: list[dict], api_key: str,
                    *, aircraft_url: str, mesh_url: str) -> DispatchResult:
-    """Dispatch both feeds independently and record the summary.
-
-    Mesh records are converted to the wire schema here, so callers may pass
-    either accumulator records or the already-converted form.
-    """
+    """Dispatch both feeds independently and record the summary."""
     if not aircraft_records and not mesh_records:
         log.info("nothing to upload this cycle")
         return DispatchResult(True, True)
@@ -258,10 +292,9 @@ def upload_records(aircraft_records: list[dict], mesh_records: list[dict], api_k
     # A shutdown mid-aircraft must not start a fresh mesh request; leaving
     # mesh_ok False keeps that window for the next run.
     if runtime.shutdown.is_set():
-        mesh_ok, mesh_totals = not mesh_records, {"imported": 0, "seen": 0}
+        mesh_ok, mesh_totals = not mesh_records, _new_totals()
     else:
-        mesh_ok, mesh_totals = upload_feed(
-            MESH_FEED, [mesh_wire_record(r) for r in mesh_records], api_key, mesh_url)
+        mesh_ok, mesh_totals = upload_feed(MESH_FEED, mesh_records, api_key, mesh_url)
 
     result = DispatchResult(aircraft_ok, mesh_ok)
 
@@ -272,8 +305,11 @@ def upload_records(aircraft_records: list[dict], mesh_records: list[dict], api_k
             "mesh_count": len(mesh_records),
             "aircraft_imported": ac_totals["imported"],
             "aircraft_seen": ac_totals["seen"],
+            "aircraft_rejected": ac_totals["rejected"],
             "mesh_imported": mesh_totals["imported"],
             "mesh_seen": mesh_totals["seen"],
+            "mesh_rejected": mesh_totals["rejected"],
+            "mesh_reject_reasons": mesh_totals["reasons"],
             "aircraft_success": aircraft_ok,
             "mesh_success": mesh_ok,
             "success": result.ok,

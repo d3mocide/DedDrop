@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 
 from . import config, runtime, storage
 from .config import log
-from .normalize import fetch_aircraft_json, merge_into, parse_snapshot
-from .uploader import mesh_wire_record, upload_records, validate_api_key
+from .normalize import fetch_aircraft_json, merge_into, parse_snapshot, predict_rejections
+from .uploader import upload_records, validate_api_key
 from .webapp import start_web_server
 
 
@@ -102,18 +102,18 @@ def do_flush(state: dict, *, force: bool = False) -> bool:
     log.info("upload window elapsed (%.2fh, %d polls) — flushing %d aircraft, %d mesh nodes",
              elapsed_h, poll_count, len(aircraft), len(mesh))
 
-    # The snapshot is the record of what was sent, so it holds the same wire
-    # form the mesh feed is dispatched in.
-    mesh_payload = [mesh_wire_record(rec) for rec in mesh]
-
     try:
-        path = storage.save_snapshot(aircraft, mesh_payload, window_start, window_end,
+        path = storage.save_snapshot(aircraft, mesh, window_start, window_end,
                                      poll_count, config.SNAPSHOT_DIR)
         log.info("saved snapshot %s", path.name)
     except OSError as e:
         log.error("could not write snapshot: %s", e)
 
-    result = upload_records(aircraft, mesh_payload, config.API_KEY,
+    # Say which nodes the server is going to refuse before it refuses them.
+    for warning in predict_rejections(mesh):
+        log.warning("%s", warning)
+
+    result = upload_records(aircraft, mesh, config.API_KEY,
                             aircraft_url=config.UPLOAD_URL,
                             mesh_url=config.MESH_UPLOAD_URL)
 

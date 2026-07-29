@@ -48,15 +48,6 @@ class TestFlushRetention(support.TempConfig):
         self.assertEqual(len(state["mesh_accumulator"]), 1)  # rejected, so retried
         self.assertGreater(runtime.next_flush_attempt, 0)
 
-    def test_mesh_is_sent_in_the_wire_schema(self):
-        state = self._state()
-        with mock.patch.object(service, "upload_records",
-                               return_value=DISPATCHED) as up:
-            service.do_flush(state, force=True)
-        mesh_arg = up.call_args.args[1]
-        self.assertEqual(mesh_arg[0]["latitude"], 1)
-        self.assertEqual(mesh_arg[0]["longitude"], 2)
-
     def test_each_feed_gets_its_own_url(self):
         state = self._state()
         with mock.patch.object(config, "MESH_UPLOAD_URL", "http://mesh"), \
@@ -169,10 +160,13 @@ class TestFlushRetention(support.TempConfig):
 
     def test_the_snapshot_records_what_was_sent(self):
         state = self._state()
-        with mock.patch.object(service, "upload_records", return_value=DISPATCHED):
+        sent = {}
+        with mock.patch.object(service, "upload_records",
+                               side_effect=lambda ac, mesh, key, **kw: sent.update(mesh=mesh)
+                               or DISPATCHED):
             service.do_flush(state, force=True)
         snapshot = json.loads(next(config.SNAPSHOT_DIR.glob("upload_*.json")).read_text())
-        self.assertEqual(snapshot["meshcore_nodes"][0]["latitude"], 1)
+        self.assertEqual(snapshot["meshcore_nodes"], sent["mesh"])
 
 
 class TestPoll(support.TempConfig):

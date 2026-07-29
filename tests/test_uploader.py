@@ -27,32 +27,51 @@ class TestEnvelope(unittest.TestCase):
         self.assertNotEqual(env["nonce"], uploader.build_envelope(payload, key)["nonce"])
 
 
-class TestMeshWireRecord(unittest.TestCase):
-    """WDGWars stores mesh positions as latitude/longitude, not lat/lon."""
+class TestRejectionAccounting(support.RuntimeIsolated):
+    """A refusal is a verdict: it must be reported, and never retried forever."""
 
-    RECORD = {"node_id": "aabb", "node_type": "REPEATER", "name": "aabb",
-              "lat": 52.1, "lon": 21.0, "rssi": -95, "type": "MESHCORE"}
+    REFUSED = {"ok": True, "meshcore_imported": 0, "meshcore_already_seen": 0,
+               "meshcore_rejected": 53, "meshcore_reject_reasons": {"bad_node_id": 53}}
 
-    def test_position_is_sent_under_both_spellings(self):
-        wire = uploader.mesh_wire_record(self.RECORD)
-        self.assertEqual(wire["latitude"], 52.1)
-        self.assertEqual(wire["longitude"], 21.0)
-        self.assertEqual(wire["lat"], 52.1)
-        self.assertEqual(wire["lon"], 21.0)
+    def test_an_itemised_refusal_counts_as_delivered(self):
+        """Re-sending records WDGWars has already refused would never end."""
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(self.REFUSED)), \
+             mock.patch.object(config, "DRY_RUN", False):
+            ok, _ = uploader.send_chunk(uploader.MESH_FEED, [{"node_id": "n"}], "k", "http://x")
+        self.assertTrue(ok)
 
-    def test_other_fields_survive(self):
-        wire = uploader.mesh_wire_record(self.RECORD)
-        self.assertEqual(wire["node_id"], "aabb")
-        self.assertEqual(wire["rssi"], -95)
+    def test_the_refusal_and_its_reasons_are_recorded(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(self.REFUSED)), \
+             mock.patch.object(config, "DRY_RUN", False), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            uploader.upload_records([], [{"node_id": "n"}], "k",
+                                    aircraft_url="http://x", mesh_url="http://x")
+        self.assertEqual(runtime.last_upload["mesh_rejected"], 53)
+        self.assertEqual(runtime.last_upload["mesh_reject_reasons"], {"bad_node_id": 53})
+        self.assertEqual(runtime.last_upload["mesh_imported"], 0)
 
-    def test_is_idempotent(self):
-        once = uploader.mesh_wire_record(self.RECORD)
-        self.assertEqual(uploader.mesh_wire_record(once), once)
+    def test_reasons_accumulate_across_chunks(self):
+        records = [{"node_id": f"n{i}"} for i in range(3)]
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(
+                            {"ok": True, "meshcore_rejected": 1,
+                             "meshcore_reject_reasons": {"bad_node_id": 1}})), \
+             mock.patch.object(config, "DRY_RUN", False), \
+             mock.patch.object(config, "BATCH_SIZE", 1), \
+             mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
+            ok, totals = uploader.upload_feed(uploader.MESH_FEED, records, "k", "http://x")
+        self.assertTrue(ok)
+        self.assertEqual(totals["rejected"], 3)
+        self.assertEqual(totals["reasons"], {"bad_node_id": 3})
 
-    def test_missing_position_stays_missing(self):
-        wire = uploader.mesh_wire_record({"node_id": "aabb"})
-        self.assertIsNone(wire["latitude"])
-        self.assertIsNone(wire["lat"])
+    def test_a_response_with_no_verdict_at_all_is_still_a_failure(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse({"ok": True})), \
+             mock.patch.object(config, "DRY_RUN", False):
+            ok, _ = uploader.send_chunk(uploader.MESH_FEED, [{"node_id": "n"}], "k", "http://x")
+        self.assertFalse(ok)
 
 
 class TestFeedSeparation(support.RuntimeIsolated):
@@ -93,9 +112,13 @@ class TestFeedSeparation(support.RuntimeIsolated):
         self.assertEqual(len(payloads[0]["aircraft"]), 1)
         self.assertEqual(payloads[0]["meshcore_nodes"], [])
         self.assertEqual(payloads[1]["aircraft"], [])
-        self.assertEqual(payloads[1]["meshcore_nodes"][0]["latitude"], 1)
+        self.assertEqual(payloads[1]["meshcore_nodes"][0]["node_id"], "n")
 
-    def test_mesh_records_are_converted_to_the_wire_schema(self):
+    def test_mesh_records_travel_verbatim(self):
+        """The accumulator already holds the confirmed meshcore wire shape."""
+        record = {"node_id": "aabb", "node_type": "REPEATER", "name": "aabb",
+                  "lat": 52.1, "lon": 21.0, "rssi": -95,
+                  "first_seen": "2026-07-29 12:00:00", "type": "MESHCORE"}
         sent = {}
 
         def fake_send(feed, chunk, key, url):
@@ -104,10 +127,10 @@ class TestFeedSeparation(support.RuntimeIsolated):
 
         with mock.patch.object(uploader, "send_chunk", side_effect=fake_send), \
              mock.patch.object(config, "CHUNK_COOLDOWN_S", 0):
-            uploader.upload_records([], [{"node_id": "n", "lat": 52.1, "lon": 21.0}], "k",
+            uploader.upload_records([], [record], "k",
                                     aircraft_url="http://ac", mesh_url="http://mesh")
 
-        self.assertEqual(sent["mesh"][0]["latitude"], 52.1)
+        self.assertEqual(sent["mesh"][0], record)
 
     def test_a_failed_mesh_dispatch_leaves_aircraft_successful(self):
         def fake_send(feed, chunk, key, url):
