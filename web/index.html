@@ -10,6 +10,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DedDrop — Telemetry Dead Drop</title>
+  <!-- .ico is the fallback browsers request on their own when they cannot use
+       the SVG; without it every page load takes a 404 for /favicon.ico. -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <!-- Replaced by the server when this page is served. Read by js/api.js;
        a meta tag rather than an inline script so a strict CSP still applies. -->
   <meta name="deddrop-control-token" content="__CONTROL_TOKEN__">
