@@ -5,7 +5,7 @@
 ## Features
 
 - **ADS-B Aircraft Accumulator**: Polls `aircraft.json` from readsb/tar1090 (default: 30s), accumulates seen aircraft in memory, and flushes HMAC-signed batches to WDGWars (default: 6h).
-- **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper.
+- **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper. Node IDs are derived from each node's public key where the push carries one, so they clear the WDGWars gate instead of coming back as `bad_node_id`.
 - **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. Native ES modules with no build step, a strict CSP, and no external CDN or font requests — it works fully offline.
 - **State Persistence & Recovery**: Accumulator state persists to `/data/state/accumulator.json` across container restarts. Saved snapshots provide an audit trail.
 - **No Silent Data Loss**: A failed upload retains the accumulated window and retries it rather than discarding it.
@@ -103,6 +103,10 @@ MeshMapper can push wardriving pings directly to DedDrop:
   header — query strings tend to end up in proxy and access logs.
 - **Quick Setup**: Click the **📡 MeshMapper Link** button on the dashboard to copy the
   deep link (`meshmapper://custom-api?url=...`).
+- **What a push contained**: `docker compose exec deddrop python3 -m deddrop.probe` prints
+  the fields the last push carried and whether they included the node public keys mesh
+  IDs are derived from. See
+  [Checking whether your pushes carry the key](#checking-whether-your-pushes-carry-the-key).
 - **No scheme in the link**: MeshMapper prepends `https://` to the endpoint it is given,
   so the link carries `host/api/wardrive` rather than `http://host/api/wardrive` — the
   latter imports as `https://http://host/api/wardrive`. DedDrop itself serves plain
@@ -121,6 +125,7 @@ MeshMapper can push wardriving pings directly to DedDrop:
 | `GET` | `/api/snapshots` | none | Recent snapshot summaries |
 | `GET` | `/api/user-stats` | none | Cached WDGWars profile stats |
 | `GET` | `/api/meshmapper-link` | control | Deep link (contains the API key) |
+| `GET` | `/api/mesh-ingest-report` | control | What the last MeshMapper push contained |
 | `POST` | `/api/wardrive` | API key | MeshMapper ping ingest |
 | `POST` | `/api/trigger-poll` | control | Force an immediate feed poll |
 | `POST` | `/api/trigger-flush` | control | Force an immediate upload flush |
@@ -207,6 +212,7 @@ deddrop/
   uploader.py    HMAC envelope, chunking, retry policy
   webapp.py      dashboard, telemetry API, ingest, control endpoints
   service.py     poll/flush lifecycle and entry point
+  probe.py       CLI: what a real MeshMapper push carried
 web/
   index.html     markup only — no inline script, no inline styles
   app.css        the stylesheet
@@ -262,22 +268,57 @@ ends in `/data/aircraft.json`.
 
 ### Mesh nodes and `bad_node_id`
 
-**Mesh nodes upload cleanly but your WDGWars profile still shows 0.** DedDrop sends
-the confirmed meshcore wire shape (`node_id, node_type, name, lat, lon, rssi,
-first_seen, type`), but WDGWars gates every node on `node_id` being **8-16 lowercase
-hex** before storing it. MeshMapper only ever exposes a **2-6 hex tail** of a node's
-public key, so most captures miss that floor and come back as
-`meshcore_reject_reasons: {"bad_node_id": n}`.
+**Mesh nodes upload cleanly but your WDGWars profile still shows 0.** WDGWars gates
+every node on `node_id` being **8-16 lowercase hex** before storing it. A MeshCore
+node's on-air name is the **leading bytes of its Ed25519 public key**, so
+`repeater_id` is a 1-3 byte prefix — 2-6 hex — which is under that floor and comes
+back as `meshcore_reject_reasons: {"bad_node_id": n}`.
 
-This is not fixable from here — the full key never reaches DedDrop, and there is
-nothing to pad a short ID with. DedDrop names the problem rather than hiding it: the
-flush log warns before uploading, the dispatch panel shows `n refused (bad_node_id)`,
-and those records are cleared rather than retried forever.
+Where a ping carries the node's full `public_key`, DedDrop takes `node_id` from its
+**first 16 hex (8 bytes)** instead. That is not a workaround: the short ID *is* that
+key's leading hex, so it is the same identity with more digits. 8 bytes is the
+canonical length — `node_id` is `varchar(16)` server-side, and shorter prefixes
+collide across live nodes, which would make two repeaters overwrite each other's
+coordinates. The full key is sent along as the optional `public_key` field; the
+server verifies `node_id` is its prefix, and its absence never rejects.
 
-The gate is documented by the reference feeder,
-[Heimdall](https://github.com/Yggdrasil-AI-labs/meshcore-to-wdgwars), which confirmed
-it against wdgwars.pl on 2026-07-03. Two others are worth knowing: a node at `lat/lon
-0,0` is refused as `no_gps` (DedDrop already drops those at ingest), and `node_type`
-no longer rejects — it coerces to `Unknown` server-side.
+Two guard rails apply:
 
-A capture source that does expose full-length node IDs passes untouched.
+- A key is used only when the short ID it arrived with is actually its leading hex,
+  so a mispaired key cannot rename a node into someone else's identity.
+- `heard_repeats` tokens carry a short ID and no key. They are resolved against keys
+  seen elsewhere in the **same push**, and only when exactly one key matches that
+  prefix. Ambiguous ones keep the short ID and are reported as a predicted rejection.
+
+A node heard without a key anywhere in its push still misses the floor. DedDrop names
+that rather than hiding it: the flush log warns before uploading, the dispatch panel
+shows `n refused (bad_node_id)`, and those records are cleared rather than retried
+forever.
+
+The approach, the 8-byte length, and the guard rails come from the reference feeder,
+[Heimdall](https://github.com/Yggdrasil-AI-labs/meshcore-to-wdgwars) — see
+[issue #6](https://github.com/d3mocide/DedDrop/issues/6). Two other gates are worth
+knowing: a node at `lat/lon 0,0` is refused as `no_gps` (DedDrop already drops those
+at ingest), and `node_type` no longer rejects — it coerces to `Unknown` server-side.
+
+### Checking whether your pushes carry the key
+
+MeshMapper's push payload is undocumented, so whether it includes `public_key` is
+answered by looking at a real push rather than by reasoning about it. Every push is
+surveyed at ingest and the result is kept:
+
+```bash
+docker compose exec deddrop python3 -m deddrop.probe
+```
+
+It prints the fields the last push carried, whether any held a 64-hex key, and how
+many node IDs that let DedDrop widen past the gate. It exits `0` when keys are
+arriving, `3` when they are not (or no push has landed yet), and `2` on a connection
+or auth failure. The same report is served at `GET /api/mesh-ingest-report`, and the
+first push of each shape logs its verdict at `INFO` — so `docker compose logs deddrop`
+answers the question too, with no debug level needed.
+
+`python3 -m deddrop.probe --self-test` runs a synthetic key-carrying push through the
+normaliser in-process instead, checking the derivation without a live feed. It sends
+nothing: POSTing a synthetic ping to `/api/wardrive` would merge invented nodes into
+the upload window and ship them to WDGWars.

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import config, runtime, storage
 from .config import log
-from .normalize import normalize_mesh_ping, merge_mesh_records
+from .normalize import describe_mesh_ingest, merge_mesh_records, normalize_mesh_capture
 
 _GZIP_MIN_BYTES = 1024
 
@@ -154,6 +154,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             "/api/snapshots": self._get_snapshots,
             "/api/user-stats": self._get_user_stats,
             "/api/meshmapper-link": self._get_meshmapper_link,
+            "/api/mesh-ingest-report": self._get_mesh_ingest_report,
         }.get(path)
         if handler is not None:
             handler()
@@ -287,6 +288,21 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         from .uploader import fetch_user_stats
         self._send_json(fetch_user_stats())
 
+    def _get_mesh_ingest_report(self):
+        """What the last MeshMapper push contained, verbatim sample included.
+
+        Behind the control token: a raw ping is more than the aggregate counts
+        the other read-only endpoints expose.
+        """
+        if not self._authorized_control():
+            self._unauthorized()
+            return
+        with runtime.lock:
+            report = dict(runtime.mesh_ingest)
+        if not report:
+            report = {"verdict": "no MeshMapper push has arrived since this process started"}
+        self._send_json({"ok": True, **report}, no_store=True)
+
     def _get_meshmapper_link(self):
         if not self._authorized_control():
             self._unauthorized()
@@ -350,10 +366,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Invalid payload format"}, status=400)
             return
 
-        records = []
-        for ping in pings:
-            if isinstance(ping, dict):
-                records.extend(normalize_mesh_ping(ping))
+        # The whole push is normalized together: a public key in one ping names
+        # the same node in another that carried only its short id.
+        records = normalize_mesh_capture(pings)
+        self._record_ingest_shape(pings, records)
 
         with runtime.lock:
             merge_mesh_records(runtime.state["mesh_accumulator"], records)
@@ -365,6 +381,32 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                  len(pings), len(records))
         self._send_json({"ok": True, "accepted_pings": len(pings),
                          "nodes_merged": len(records)})
+
+    def _record_ingest_shape(self, pings: list, records: list) -> None:
+        """Keep, and announce once, what a real MeshMapper push looks like.
+
+        Whether the push carries ``public_key`` decides whether mesh nodes clear
+        the server's node_id gate at all, and it cannot be settled from the
+        MeshMapper docs. The first push says so in the log at INFO — no debug
+        level needed — and every push is kept for /api/mesh-ingest-report.
+        """
+        report = describe_mesh_ingest(pings, records)
+        report["timestamp"] = time.time()
+
+        with runtime.lock:
+            previous = runtime.mesh_ingest
+            runtime.mesh_ingest = report
+
+        # Repeat only when the shape changes: MeshMapper pushes continuously and
+        # this is a description of the feed, not an event.
+        if previous.get("fields") == report["fields"]:
+            return
+        log.info("MeshMapper push shape: %d ping(s) carrying %s",
+                 report["pings"], ", ".join(report["fields"]) or "no fields")
+        log.info("MeshMapper push: %s", report["verdict"])
+        log.info("mesh node_ids clearing the WDGWars gate: %d of %d (sample ping: %s)",
+                 report["nodes_passing_node_id_gate"], report["nodes"],
+                 json.dumps(report["sample_ping"], separators=(",", ":"))[:600])
 
     def _post_trigger(self, path: str):
         if not self._authorized_control():

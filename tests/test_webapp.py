@@ -20,6 +20,7 @@ setUpModule = support.quiet_logs
 tearDownModule = support.restore_logs
 
 API_KEY = config.API_KEY
+KEY = "aabb0f1e2d3c4b5a" + "9" * 48  # 64-hex node public key, short id "aabb"
 
 
 def request(url, *, method="GET", data=None, headers=None, gzip_ok=False):
@@ -171,6 +172,65 @@ class TestWardriveIngest(WebServerCase):
                                   data=payload.encode(), headers={"X-API-Key": API_KEY})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["nodes_merged"], 1)
+
+    def test_a_pushed_public_key_widens_the_node_id(self):
+        payload = json.dumps({"data": [
+            {"type": "DISC", "lat": 52.1, "lon": 21.0,
+             "repeater_id": "aabb", "public_key": KEY},
+            {"type": "TRACE", "lat": 52.2, "lon": 21.1, "repeater_id": "none",
+             "heard_repeats": "aabb(R)(-95)"},
+        ]}).encode()
+        status, _, _ = request(f"{self.base}/api/wardrive", method="POST", data=payload,
+                               headers={"X-API-Key": API_KEY})
+        self.assertEqual(status, 200)
+        with runtime.lock:
+            # Both pings name the one node, under the id derived from its key.
+            self.assertEqual(list(runtime.state["mesh_accumulator"]), [KEY[:16]])
+
+
+class TestMeshIngestReport(WebServerCase):
+    """Whether a real push carries public_key is answered from a real push."""
+
+    def _push(self, pings):
+        status, _, _ = request(f"{self.base}/api/wardrive", method="POST",
+                               data=json.dumps({"data": pings}).encode(),
+                               headers={"X-API-Key": API_KEY})
+        self.assertEqual(status, 200)
+
+    def _report(self):
+        status, body, _ = request(f"{self.base}/api/mesh-ingest-report",
+                                  headers={"X-Control-Token": config.CONTROL_TOKEN})
+        self.assertEqual(status, 200)
+        return json.loads(body)
+
+    def test_requires_auth(self):
+        status, _, _ = request(f"{self.base}/api/mesh-ingest-report")
+        self.assertEqual(status, 401)
+
+    def test_says_so_before_any_push_has_arrived(self):
+        self.assertIn("no MeshMapper push", self._report()["verdict"])
+
+    def test_reports_the_fields_a_push_carried(self):
+        self._push([{"type": "DISC", "lat": 52.1, "lon": 21.0,
+                     "repeater_id": "aabb", "public_key": KEY}])
+        report = self._report()
+        self.assertEqual(report["public_key_field"], "public_key")
+        self.assertEqual(report["nodes_passing_node_id_gate"], 1)
+        self.assertIn("public_key", report["fields"])
+        self.assertEqual(report["sample_ping"]["repeater_id"], "aabb")
+        self.assertGreater(report["timestamp"], 0)
+
+    def test_reports_a_push_that_carries_no_key(self):
+        self._push([{"type": "DISC", "lat": 52.1, "lon": 21.0, "repeater_id": "aabb"}])
+        report = self._report()
+        self.assertIsNone(report["public_key_field"])
+        self.assertEqual(report["nodes_short_id"], 1)
+
+    def test_the_report_tracks_the_most_recent_push(self):
+        self._push([{"type": "DISC", "lat": 52.1, "lon": 21.0, "repeater_id": "aabb"}])
+        self._push([{"type": "DISC", "lat": 52.1, "lon": 21.0,
+                     "repeater_id": "aabb", "public_key": KEY}])
+        self.assertEqual(self._report()["pings_with_public_key"], 1)
 
 
 class TestControlEndpoints(WebServerCase):
