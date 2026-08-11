@@ -26,11 +26,22 @@ _LAST_UPLOAD_FIELDS = {
     "mesh_imported": int,
     "mesh_seen": int,
     "mesh_rejected": int,
+    "aircraft_reject_reasons": dict,
     "mesh_reject_reasons": dict,
     "aircraft_success": bool,
     "mesh_success": bool,
     "success": bool,
     "dry_run": bool,
+}
+
+# A dispatch log entry is that summary plus the window it covered. last_upload
+# only ever holds the most recent one, so without this a refusal scrolls out of
+# the log and there is nothing left to compare the next window against.
+_DISPATCH_FIELDS = {
+    **_LAST_UPLOAD_FIELDS,
+    "window_start": float,
+    "window_end": float,
+    "polls": int,
 }
 
 # Summaries keyed by (name, mtime_ns, size). Snapshots are immutable once
@@ -144,6 +155,68 @@ def save_state(state: dict) -> None:
                           separators=(",", ":"))
     with runtime.save_lock:
         atomic_write(config.STATE_FILE, blob)
+
+
+# ── Dispatch log ──────────────────────────────────────────────────────────
+def coerce_dispatch_entry(raw) -> dict:
+    """Accept one persisted dispatch entry, dropping anything malformed."""
+    if not isinstance(raw, dict):
+        return {}
+    entry = {}
+    for key, cast in _DISPATCH_FIELDS.items():
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            entry[key] = cast(value)
+        except (TypeError, ValueError):
+            log.debug("dispatch log field %r was not a %s — dropped", key, cast.__name__)
+    # Undated, it cannot be placed in the history at all.
+    return entry if "timestamp" in entry else {}
+
+
+def coerce_dispatch_log(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        if raw is not None:
+            log.warning("dispatch log is not a JSON array — starting a fresh one")
+        return []
+    entries = [clean for item in raw if (clean := coerce_dispatch_entry(item))]
+    if len(entries) != len(raw):
+        log.warning("dropped %d malformed dispatch log entr(ies)", len(raw) - len(entries))
+    return entries
+
+
+def load_dispatch_log() -> list[dict]:
+    """Read the persisted history. A missing or unreadable file is not fatal."""
+    try:
+        raw = json.loads(config.DISPATCH_LOG_FILE.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as e:
+        log.warning("could not read dispatch log (%s) — starting a fresh one", e)
+        return []
+    return coerce_dispatch_log(raw)[-config.DISPATCH_LOG_LIMIT:]
+
+
+def append_dispatch(entry: dict) -> None:
+    """Record one dispatch, oldest entries falling off the end.
+
+    Best-effort: this is history for the dashboard, so a failure to write it
+    must not take down a flush that otherwise succeeded.
+    """
+    clean = coerce_dispatch_entry(entry)
+    if not clean:
+        log.debug("refusing to log a dispatch entry with no timestamp")
+        return
+
+    with runtime.lock:
+        runtime.dispatch_log = (runtime.dispatch_log + [clean])[-config.DISPATCH_LOG_LIMIT:]
+        blob = json.dumps(runtime.dispatch_log, separators=(",", ":"))
+    try:
+        with runtime.save_lock:
+            atomic_write(config.DISPATCH_LOG_FILE, blob)
+    except OSError as e:
+        log.warning("could not persist the dispatch log: %s", e)
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────

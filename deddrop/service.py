@@ -69,6 +69,16 @@ def _drop_uploaded(accumulator: dict[str, dict], uploaded: list[tuple[str, dict]
     return removed
 
 
+def _log_dispatch(window_start: float, window_end: float, poll_count: int) -> None:
+    """Add the dispatch the uploader just summarized to the persisted history."""
+    with runtime.lock:
+        summary = dict(runtime.last_upload)
+    if not summary:
+        return
+    storage.append_dispatch({**summary, "window_start": window_start,
+                             "window_end": window_end, "polls": poll_count})
+
+
 def do_flush(state: dict, *, force: bool = False) -> bool:
     now = time.time()
     window_start = state["window_start"]
@@ -116,6 +126,10 @@ def do_flush(state: dict, *, force: bool = False) -> bool:
     result = upload_records(aircraft, mesh, config.API_KEY,
                             aircraft_url=config.UPLOAD_URL,
                             mesh_url=config.MESH_UPLOAD_URL)
+
+    # Logged whether or not it landed: a failed dispatch is exactly the one
+    # worth being able to look back at.
+    _log_dispatch(window_start, window_end, poll_count)
 
     if not result.ok:
         # Each feed is dispatched separately, so only the ones that failed are
@@ -221,6 +235,7 @@ def main() -> int:
     state = storage.load_state()
     with runtime.lock:
         runtime.state = state
+        runtime.dispatch_log = storage.load_dispatch_log()
 
     if state["poll_count"] or state["accumulator"] or state["mesh_accumulator"]:
         log.info("resumed state: %d polls, %d aircraft, %d mesh nodes accumulated since %s",

@@ -1,6 +1,9 @@
-// The aircraft / mesh-node table: tab state, sorting, filtering, rendering.
+// The aircraft / mesh-node / dispatch-report table: tab state, sorting,
+// filtering, rendering.
 
-import { esc, fmtCoord, fmtOpt, fmtRssi } from './format.js';
+import { esc, feedResult, fmtCoord, fmtNum, fmtOpt, fmtRssi } from './format.js';
+
+export const TABS = ['aircraft', 'mesh', 'reports'];
 
 const COLUMNS = {
   aircraft: [
@@ -11,6 +14,12 @@ const COLUMNS = {
     ['node_id', 'Node ID'], ['node_type', 'Type'], ['lat', 'Latitude'],
     ['lon', 'Longitude'], ['rssi', 'RSSI (dBm)'], ['first_seen', 'First Seen'],
   ],
+  // The two feed columns sort on what was sent; the counts they print are the
+  // verdict WDGWars returned for it.
+  reports: [
+    ['timestamp', 'Dispatched'], ['window_hours', 'Window'], ['polls', 'Polls'],
+    ['aircraft_count', 'Aircraft'], ['mesh_count', 'Mesh'],
+  ],
 };
 
 const TITLES = {
@@ -18,12 +27,43 @@ const TITLES = {
              'Aircraft signals intercepted in current dead drop window'],
   mesh: ['Accumulated LoRa Mesh Telemetry',
          'Mesh nodes ingested from MeshMapper wardriving pings'],
+  reports: ['Dispatch Reports',
+            'What WDGWars made of each upload window, newest first'],
+};
+
+const DEFAULT_SORT = { aircraft: 'first_seen', mesh: 'first_seen', reports: 'timestamp' };
+
+const EMPTY = {
+  aircraft: 'No aircraft signals in window.',
+  mesh: 'No mesh nodes ingested in current window.',
+  reports: 'No dispatches yet — the first upload window has not closed.',
+};
+
+// What the search box matches per tab, and what identifies a row for the
+// re-render check below.
+const SEARCH_TEXT = {
+  aircraft: (r) => `${r.icao || ''} ${r.callsign || ''}`,
+  mesh: (r) => `${r.node_id || ''} ${r.node_type || ''}`,
+  reports: (r) => [
+    dispatchedAt(r),
+    Object.keys(r.aircraft_reject_reasons || {}).join(' '),
+    Object.keys(r.mesh_reject_reasons || {}).join(' '),
+    r.success === false ? 'failed' : '',
+    r.dry_run ? 'dry run' : '',
+  ].join(' '),
+};
+
+const ROW_KEY = {
+  aircraft: (r) => `${r.icao}${r.first_seen}`,
+  mesh: (r) => `${r.node_id}${r.first_seen}`,
+  reports: (r) => `${r.timestamp}${r.success}`,
 };
 
 const state = {
   tab: 'aircraft',
   aircraft: [],
   mesh: [],
+  reports: [],
   sortCol: 'first_seen',
   sortAsc: false,
   lastRenderKey: '',
@@ -43,20 +83,38 @@ export function setData({ aircraft, mesh }) {
   render();
 }
 
+// window_hours is derived here rather than server-side: the entry stores the
+// window's ends, and this is the only place that wants it as a duration.
+export function setReports(entries) {
+  state.reports = entries.map((e) => ({
+    ...e,
+    window_hours: e.window_start && e.window_end
+      ? Math.max(0, (e.window_end - e.window_start) / 3600) : 0,
+  }));
+  render();
+}
+
+export function currentTab() {
+  return state.tab;
+}
+
 export function switchTab(tab) {
   state.tab = tab;
-  $('tab-aircraft').classList.toggle('active', tab === 'aircraft');
-  $('tab-mesh').classList.toggle('active', tab === 'mesh');
-  $('tab-aircraft').setAttribute('aria-selected', String(tab === 'aircraft'));
-  $('tab-mesh').setAttribute('aria-selected', String(tab === 'mesh'));
+  for (const name of TABS) {
+    const btn = $(`tab-${name}`);
+    btn.classList.toggle('active', tab === name);
+    btn.setAttribute('aria-selected', String(tab === name));
+  }
   const [title, subtitle] = TITLES[tab];
   $('table-title').innerText = title;
   $('table-subtitle').innerText = subtitle;
+  // Only the reports tab has an ingest summary to show above the table.
+  $('ingest-summary').classList.toggle('visible', tab === 'reports');
 
-  // The two tabs share no columns, so a sort carried over from the other one
-  // would name a field that does not exist here.
+  // The tabs share no columns, so a sort carried over from another one would
+  // name a field that does not exist here.
   if (!COLUMNS[tab].some(([col]) => col === state.sortCol)) {
-    state.sortCol = 'first_seen';
+    state.sortCol = DEFAULT_SORT[tab];
     state.sortAsc = false;
   }
   buildSortOptions();
@@ -105,10 +163,8 @@ function syncSortControl() {
 }
 
 function rowsFor(tab, query) {
-  const source = tab === 'aircraft' ? state.aircraft : state.mesh;
-  const fields = tab === 'aircraft' ? ['icao', 'callsign'] : ['node_id', 'node_type'];
-  const filtered = source.filter((r) =>
-    fields.some((f) => (r[f] || '').toUpperCase().includes(query)));
+  const filtered = state[tab].filter((r) =>
+    SEARCH_TEXT[tab](r).toUpperCase().includes(query));
 
   return filtered.sort((a, b) => {
     let x = a[state.sortCol] ?? '';
@@ -141,6 +197,38 @@ function meshCells(m) {
   ];
 }
 
+// A dispatch from a previous day needs its date; today's only needs the time.
+function dispatchedAt(r) {
+  if (!r.timestamp) return '--';
+  const when = new Date(r.timestamp * 1000);
+  return when.toDateString() === new Date().toDateString()
+    ? when.toLocaleTimeString() : when.toLocaleString();
+}
+
+// A refusal and a failed delivery are different outcomes and read differently:
+// refused means WDGWars saw the records and said no, not delivered means it
+// never gave a verdict and the window was retained.
+function feedCell(count, imported, success, rejected, reasons) {
+  const cls = success === false ? 'feed-failed' : (rejected ? 'feed-refused' : 'feed-ok');
+  return `<span class="${cls}">` +
+         `${esc(feedResult(count, imported, success, rejected, reasons))}</span>`;
+}
+
+function reportCells(r) {
+  const tag = r.dry_run ? '<span class="report-tag">dry run</span>' : '';
+  return [
+    `<span class="report-time">${esc(dispatchedAt(r))}</span>${tag}`,
+    `${r.window_hours.toFixed(2)}h`,
+    fmtNum(r.polls || 0),
+    feedCell(r.aircraft_count, r.aircraft_imported, r.aircraft_success,
+             r.aircraft_rejected, r.aircraft_reject_reasons),
+    feedCell(r.mesh_count, r.mesh_imported, r.mesh_success,
+             r.mesh_rejected, r.mesh_reject_reasons),
+  ];
+}
+
+const CELLS = { aircraft: aircraftCells, mesh: meshCells, reports: reportCells };
+
 // data-label carries the column name into each cell so the stacked mobile
 // layout can print it alongside the value once the header row is hidden.
 function rowHtml(cells) {
@@ -151,13 +239,12 @@ function rowHtml(cells) {
 
 export function render(force = false) {
   const query = $('search-input').value.toUpperCase();
-  const source = state.tab === 'aircraft' ? state.aircraft : state.mesh;
-  const idField = state.tab === 'aircraft' ? 'icao' : 'node_id';
+  const source = state[state.tab];
 
   // Rebuilding identical rows on every poll throws away scroll position and any
   // in-progress text selection, so skip the write when nothing changed.
   const key = [state.tab, query, state.sortCol, state.sortAsc, source.length,
-               source.map((r) => r[idField] + r.first_seen).join()].join('|');
+               source.map(ROW_KEY[state.tab]).join()].join('|');
   if (!force && key === state.lastRenderKey) return;
   state.lastRenderKey = key;
 
@@ -180,13 +267,11 @@ export function render(force = false) {
 
   const rows = rowsFor(state.tab, query);
   if (rows.length === 0) {
-    const empty = source.length === 0
-      ? (state.tab === 'aircraft' ? 'No aircraft signals in window.'
-                                  : 'No mesh nodes ingested in current window.')
-      : 'No matching signals.';
-    $('table-body').innerHTML = `<tr><td colspan="6" class="empty-state">${empty}</td></tr>`;
+    const empty = source.length === 0 ? EMPTY[state.tab] : 'No matching signals.';
+    $('table-body').innerHTML = `<tr><td colspan="${COLUMNS[state.tab].length}" ` +
+                                `class="empty-state">${empty}</td></tr>`;
   } else {
-    const cellFn = state.tab === 'aircraft' ? aircraftCells : meshCells;
+    const cellFn = CELLS[state.tab];
     $('table-body').innerHTML = rows.map((r) => rowHtml(cellFn(r))).join('');
   }
 

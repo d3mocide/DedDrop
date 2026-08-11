@@ -52,6 +52,12 @@
         <path d="M4.9 4.9a10 10 0 0 0 0 14.2M19.1 19.1a10 10 0 0 0 0-14.2"/>
       </symbol>
 
+      <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <path d="M17 8l-5-5-5 5M12 3v12"/>
+      </symbol>
+
       <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M13 2 3 14h9l-1 8 10-12h-9z"/>
@@ -274,7 +280,14 @@
           <svg class="icon" aria-hidden="true"><use href="#i-signal"/></svg>
           LoRa Mesh Recon (<span id="tab-mesh-count">0</span>)
         </button>
+        <button class="tab-btn" id="tab-reports" role="tab" aria-selected="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>
+          Dispatch Reports (<span id="tab-reports-count">0</span>)
+        </button>
       </div>
+
+      <!-- Shown on the reports tab only; filled by panels.js. -->
+      <div class="ingest-summary" id="ingest-summary"></div>
 
       <div class="table-header">
         <div>

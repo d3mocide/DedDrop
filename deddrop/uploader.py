@@ -306,6 +306,7 @@ def upload_records(aircraft_records: list[dict], mesh_records: list[dict], api_k
             "aircraft_imported": ac_totals["imported"],
             "aircraft_seen": ac_totals["seen"],
             "aircraft_rejected": ac_totals["rejected"],
+            "aircraft_reject_reasons": ac_totals["reasons"],
             "mesh_imported": mesh_totals["imported"],
             "mesh_seen": mesh_totals["seen"],
             "mesh_rejected": mesh_totals["rejected"],

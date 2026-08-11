@@ -72,8 +72,10 @@ class TempConfig(RuntimeIsolated):
         self.root = Path(self.dir.name)
         self.state_file = self.root / "state" / "accumulator.json"
         self.snapshot_dir = self.root / "snapshots"
+        self.dispatch_log_file = self.root / "state" / "dispatch_log.json"
         for attr, value in (("STATE_FILE", self.state_file),
-                            ("SNAPSHOT_DIR", self.snapshot_dir)):
+                            ("SNAPSHOT_DIR", self.snapshot_dir),
+                            ("DISPATCH_LOG_FILE", self.dispatch_log_file)):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
