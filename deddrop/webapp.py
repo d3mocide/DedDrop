@@ -152,6 +152,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             "/api/aircraft": self._get_aircraft,
             "/api/mesh-nodes": self._get_mesh_nodes,
             "/api/snapshots": self._get_snapshots,
+            "/api/dispatch-log": self._get_dispatch_log,
             "/api/user-stats": self._get_user_stats,
             "/api/meshmapper-link": self._get_meshmapper_link,
             "/api/mesh-ingest-report": self._get_mesh_ingest_report,
@@ -280,6 +281,17 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         with runtime.lock:
             records = list(runtime.state.get("mesh_accumulator", {}).values())
         self._send_json(records)
+
+    def _get_dispatch_log(self):
+        """Dispatch history, newest first.
+
+        Unauthenticated like /api/status, which already reports the most recent
+        dispatch — this is the same counters, further back. It holds no keys and
+        no raw pings.
+        """
+        with runtime.lock:
+            entries = list(reversed(runtime.dispatch_log))
+        self._send_json(entries)
 
     def _get_snapshots(self):
         self._send_json(storage.list_snapshots(config.SNAPSHOT_DIR))

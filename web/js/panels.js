@@ -1,7 +1,7 @@
 // The status badge, stat cards, profile banner, and snapshot archive list.
 
 import * as api from './api.js';
-import { esc, fmtNum } from './format.js';
+import { esc, feedResult, fmtNum } from './format.js';
 import * as table from './table.js';
 
 const $ = (id) => document.getElementById(id);
@@ -64,17 +64,6 @@ export async function refreshStatus() {
   }
 }
 
-// "28 sent / 0 new" on its own reads as a mystery. A refusal WDGWars itemised
-// is the answer, so it goes on the same line.
-function feedResult(count, imported, success, rejected, reasons) {
-  let line = `${fmtNum(count || 0)} sent / ${fmtNum(imported || 0)} new`;
-  if (rejected) {
-    const why = Object.keys(reasons || {}).join(', ');
-    line += ` / ${fmtNum(rejected)} refused${why ? ` (${why})` : ''}`;
-  }
-  return success === false ? `${line} — not delivered` : line;
-}
-
 // Which feed the pending retry is for. Older summaries carry only the combined
 // flag, so fall back to the unqualified wording rather than naming the wrong one.
 function failedFeeds(up) {
@@ -117,6 +106,51 @@ export async function refreshTables() {
   } catch {
     /* transient; the status badge already reports connectivity */
   }
+}
+
+export async function refreshReports() {
+  try {
+    const entries = await api.getDispatchLog();
+    setText('tab-reports-count', fmtNum(entries.length));
+    table.setReports(entries);
+  } catch {
+    /* transient; the status badge already reports connectivity */
+  }
+  // The dispatch log is public and cheap, so its count keeps the tab label
+  // honest from anywhere. The ingest report costs a control-auth round trip for
+  // something only that tab renders.
+  if (table.currentTab() === 'reports') await refreshIngestSummary();
+}
+
+// Whether MeshMapper is sending the public keys mesh node_ids are derived from
+// is the difference between mesh nodes landing and coming back bad_node_id, so
+// it belongs next to the dispatch history rather than in a container shell.
+async function refreshIngestSummary() {
+  const box = $('ingest-summary');
+  let report;
+  try {
+    report = await api.getMeshIngestReport();
+  } catch {
+    box.innerHTML = '<span class="ingest-verdict">Ingest report unavailable — ' +
+                    'reload the dashboard to renew its control token.</span>';
+    return;
+  }
+
+  const gate = report.nodes
+    ? `${fmtNum(report.nodes_passing_node_id_gate || 0)} of ${fmtNum(report.nodes)} ` +
+      `node IDs clear the WDGWars gate`
+    : 'no mesh nodes in that push';
+  const keyed = report.public_key_field
+    ? `${fmtNum(report.pings_with_public_key || 0)} of ${fmtNum(report.pings || 0)} ` +
+      `pings carry a key`
+    : 'no public key field';
+  const tone = report.pings_with_public_key ? 'ingest-ok' : 'ingest-warn';
+
+  box.innerHTML =
+    `<span class="ingest-label">MeshMapper ingest</span>` +
+    `<span class="${tone}">${esc(keyed)}</span>` +
+    `<span class="ingest-gate">${esc(gate)}</span>` +
+    `<span class="ingest-verdict">${esc(report.verdict || '')}</span>`;
 }
 
 export async function refreshSnapshots() {

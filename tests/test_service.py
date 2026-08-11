@@ -169,6 +169,63 @@ class TestFlushRetention(support.TempConfig):
         self.assertEqual(snapshot["meshcore_nodes"], sent["mesh"])
 
 
+class TestDispatchLogging(support.TempConfig):
+    """Each flush leaves a record of what the server made of it."""
+
+    def _state(self):
+        state = runtime.default_state()
+        state["accumulator"] = {"A": {"icao": "A"}}
+        state["mesh_accumulator"] = {"n1": {"node_id": "n1", "lat": 1, "lon": 2}}
+        return state
+
+    def _upload(self, result, **summary):
+        """Stand in for upload_records, which is what writes last_upload."""
+        def run(*_args, **_kwargs):
+            with runtime.lock:
+                runtime.last_upload = {"timestamp": 1700000000.0, "aircraft_count": 1,
+                                       "mesh_count": 1, "success": result.ok, **summary}
+            return result
+        return run
+
+    def test_a_successful_dispatch_is_logged(self):
+        with mock.patch.object(service, "upload_records", side_effect=self._upload(DISPATCHED)):
+            service.do_flush(self._state(), force=True)
+        entries = storage.load_dispatch_log()
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["success"])
+        self.assertEqual(entries[0]["polls"], 0)
+        self.assertIn("window_start", entries[0])
+
+    def test_a_failed_dispatch_is_logged_too(self):
+        """The failures are exactly the ones worth looking back at."""
+        with mock.patch.object(service, "upload_records",
+                               side_effect=self._upload(NOTHING_LANDED)):
+            service.do_flush(self._state(), force=True)
+        entries = storage.load_dispatch_log()
+        self.assertEqual(len(entries), 1)
+        self.assertFalse(entries[0]["success"])
+
+    def test_refusal_reasons_reach_the_log(self):
+        upload = self._upload(MESH_REJECTED, mesh_rejected=3,
+                              mesh_reject_reasons={"bad_node_id": 3})
+        with mock.patch.object(service, "upload_records", side_effect=upload):
+            service.do_flush(self._state(), force=True)
+        self.assertEqual(storage.load_dispatch_log()[0]["mesh_reject_reasons"],
+                         {"bad_node_id": 3})
+
+    def test_successive_flushes_build_a_history(self):
+        for _ in range(3):
+            with mock.patch.object(service, "upload_records",
+                                   side_effect=self._upload(DISPATCHED)):
+                service.do_flush(self._state(), force=True)
+        self.assertEqual(len(storage.load_dispatch_log()), 3)
+
+    def test_an_empty_window_logs_nothing(self):
+        """Nothing was dispatched, so there is no verdict to record."""
+        service.do_flush(runtime.default_state(), force=True)
+        self.assertEqual(storage.load_dispatch_log(), [])
+
+
 class TestPoll(support.TempConfig):
     FEED = {"now": 1700000000, "aircraft": [
         {"hex": "4CA7B1", "lat": 52.1, "lon": 21.0, "gs": 450, "track": 270},

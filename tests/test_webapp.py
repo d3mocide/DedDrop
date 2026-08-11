@@ -233,6 +233,33 @@ class TestMeshIngestReport(WebServerCase):
         self.assertEqual(self._report()["pings_with_public_key"], 1)
 
 
+class TestDispatchLogEndpoint(WebServerCase):
+    def _entries(self, *timestamps):
+        with runtime.lock:
+            runtime.dispatch_log = [
+                {"timestamp": ts, "aircraft_count": 10, "mesh_count": 2,
+                 "success": True} for ts in timestamps]
+
+    def test_empty_before_any_dispatch(self):
+        status, body, _ = request(f"{self.base}/api/dispatch-log")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), [])
+
+    def test_returns_newest_first(self):
+        """The runtime list is oldest-first; a reader wants the latest on top."""
+        self._entries(1700000000.0, 1700021600.0, 1700043200.0)
+        _, body, _ = request(f"{self.base}/api/dispatch-log")
+        self.assertEqual([e["timestamp"] for e in json.loads(body)],
+                         [1700043200.0, 1700021600.0, 1700000000.0])
+
+    def test_needs_no_auth_and_leaks_no_key(self):
+        """Same class of data as /api/status, which is already open."""
+        self._entries(1700000000.0)
+        status, body, _ = request(f"{self.base}/api/dispatch-log")
+        self.assertEqual(status, 200)
+        self.assertNotIn(API_KEY, body)
+
+
 class TestControlEndpoints(WebServerCase):
     def test_trigger_poll_requires_auth(self):
         status, _, _ = request(f"{self.base}/api/trigger-poll", method="POST", data=b"")

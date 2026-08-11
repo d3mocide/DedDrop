@@ -132,6 +132,82 @@ class TestState(support.TempConfig):
         self.assertFalse(target.exists())
 
 
+def dispatch(timestamp=1700000000.0, **overrides):
+    return {"timestamp": timestamp, "window_start": timestamp - 21600,
+            "window_end": timestamp, "polls": 720, "aircraft_count": 400,
+            "aircraft_imported": 390, "mesh_count": 12, "mesh_imported": 12,
+            "success": True, **overrides}
+
+
+class TestDispatchLog(support.TempConfig):
+    """History of what WDGWars made of each window, one entry per dispatch."""
+
+    def test_entries_round_trip(self):
+        storage.append_dispatch(dispatch())
+        entries = storage.load_dispatch_log()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["polls"], 720)
+        self.assertEqual(entries[0]["aircraft_imported"], 390)
+
+    def test_entries_accumulate_oldest_first(self):
+        for ts in (1700000000.0, 1700021600.0, 1700043200.0):
+            storage.append_dispatch(dispatch(ts))
+        self.assertEqual([e["timestamp"] for e in storage.load_dispatch_log()],
+                         [1700000000.0, 1700021600.0, 1700043200.0])
+
+    def test_the_log_is_bounded(self):
+        with mock.patch.object(storage.config, "DISPATCH_LOG_LIMIT", 3):
+            for ts in range(1700000000, 1700000006):
+                storage.append_dispatch(dispatch(float(ts)))
+            entries = storage.load_dispatch_log()
+        self.assertEqual(len(entries), 3)
+        # The three most recent survive; the oldest fall off.
+        self.assertEqual([e["timestamp"] for e in entries],
+                         [1700000003.0, 1700000004.0, 1700000005.0])
+
+    def test_reject_reasons_survive_the_round_trip(self):
+        storage.append_dispatch(dispatch(mesh_rejected=3,
+                                         mesh_reject_reasons={"bad_node_id": 3}))
+        self.assertEqual(storage.load_dispatch_log()[0]["mesh_reject_reasons"],
+                         {"bad_node_id": 3})
+
+    def test_an_undated_entry_is_refused(self):
+        storage.append_dispatch({"aircraft_count": 5})
+        self.assertEqual(storage.load_dispatch_log(), [])
+
+    def test_a_missing_file_is_an_empty_history(self):
+        self.assertEqual(storage.load_dispatch_log(), [])
+
+    def test_a_corrupt_file_does_not_raise(self):
+        self.dispatch_log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.dispatch_log_file.write_text("{not json")
+        self.assertEqual(storage.load_dispatch_log(), [])
+
+    def test_a_non_array_document_is_repaired(self):
+        self.dispatch_log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.dispatch_log_file.write_text(json.dumps({"nope": True}))
+        self.assertEqual(storage.load_dispatch_log(), [])
+
+    def test_malformed_entries_are_dropped_individually(self):
+        self.dispatch_log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.dispatch_log_file.write_text(json.dumps(
+            [dispatch(), "not-a-dict", {"no": "timestamp"}, dispatch(1700021600.0)]))
+        self.assertEqual(len(storage.load_dispatch_log()), 2)
+
+    def test_wrong_field_types_are_dropped_not_fatal(self):
+        storage.append_dispatch(dispatch(polls="seven", aircraft_count=400))
+        entry = storage.load_dispatch_log()[0]
+        self.assertNotIn("polls", entry)
+        self.assertEqual(entry["aircraft_count"], 400)
+
+    def test_an_unwritable_path_does_not_break_a_flush(self):
+        """History is a nicety; losing it must not fail the dispatch."""
+        with mock.patch.object(storage, "atomic_write", side_effect=OSError("read-only")):
+            storage.append_dispatch(dispatch())
+        # It is still in memory for the dashboard, just not on disk.
+        self.assertEqual(len(runtime.dispatch_log), 1)
+
+
 class TestSnapshots(unittest.TestCase):
     def setUp(self):
         self.dir = __import__("tempfile").TemporaryDirectory()

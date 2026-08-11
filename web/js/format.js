@@ -20,6 +20,18 @@ export function fmtNum(n) {
   return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
 }
 
+// "28 sent / 0 new" on its own reads as a mystery. A refusal WDGWars itemised
+// is the answer, so it goes on the same line. Shared by the dispatch panel and
+// the report table so both describe a dispatch the same way.
+export function feedResult(count, imported, success, rejected, reasons) {
+  let line = `${fmtNum(count || 0)} sent / ${fmtNum(imported || 0)} new`;
+  if (rejected) {
+    const why = Object.keys(reasons || {}).join(', ');
+    line += ` / ${fmtNum(rejected)} refused${why ? ` (${why})` : ''}`;
+  }
+  return success === false ? `${line} — not delivered` : line;
+}
+
 const UNKNOWN = '<span class="text-dim">--</span>';
 
 // Missing telemetry is null on the wire, not a fabricated 0, so render it as

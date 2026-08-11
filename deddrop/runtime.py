@@ -33,6 +33,9 @@ state: dict = default_state()
 
 last_poll_time: float = 0.0
 last_upload: dict = {}
+# One entry per dispatch, oldest first. last_upload is only ever the most
+# recent, so this is what makes a run of refusals visible as a trend.
+dispatch_log: list = []
 last_skipped: int = 0
 next_flush_attempt: float = 0.0
 
@@ -53,13 +56,14 @@ def sleep_interruptible(seconds: float) -> bool:
 def reset() -> None:
     """Restore process-start defaults. Used by tests."""
     global state, last_poll_time, last_upload, last_skipped, next_flush_attempt
-    global user_stats, user_stats_updated, mesh_ingest
+    global user_stats, user_stats_updated, mesh_ingest, dispatch_log
     shutdown.clear()
     poll_now.clear()
     flush_now.clear()
     state = default_state()
     last_poll_time = 0.0
     last_upload = {}
+    dispatch_log = []
     last_skipped = 0
     next_flush_attempt = 0.0
     user_stats = {}

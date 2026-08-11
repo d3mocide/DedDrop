@@ -40,6 +40,11 @@ RETRY_INTERVAL_MINUTES = float(os.environ.get("RETRY_INTERVAL_MINUTES", "15"))
 STATE_FILE = _path("STATE_FILE", "/data/state/accumulator.json")
 SNAPSHOT_DIR = _path("SNAPSHOT_DIR", "/data/snapshots")
 SNAPSHOT_RETENTION = int(os.environ.get("SNAPSHOT_RETENTION", "200"))
+
+# One entry per dispatch: what was sent and what WDGWars made of it. Bounded,
+# since the dashboard reads the whole file and only recent history is useful.
+DISPATCH_LOG_FILE = _path("DISPATCH_LOG_FILE", STATE_FILE.parent / "dispatch_log.json")
+DISPATCH_LOG_LIMIT = int(os.environ.get("DISPATCH_LOG_LIMIT", "50"))
 SAVE_LATEST_RAW = _flag("SAVE_LATEST_RAW", "true")
 LATEST_RAW_PATH = _path("LATEST_RAW_PATH", "/data/latest_raw.json")
 

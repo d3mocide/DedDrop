@@ -6,7 +6,7 @@
 
 - **ADS-B Aircraft Accumulator**: Polls `aircraft.json` from readsb/tar1090 (default: 30s), accumulates seen aircraft in memory, and flushes HMAC-signed batches to WDGWars (default: 6h).
 - **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper. Node IDs are derived from each node's public key where the push carries one, so they clear the WDGWars gate instead of coming back as `bad_node_id`.
-- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. Native ES modules with no build step, a strict CSP, and no external CDN or font requests — it works fully offline.
+- **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, a **Dispatch Reports** tab holding what WDGWars made of each upload window, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. Native ES modules with no build step, a strict CSP, and no external CDN or font requests — it works fully offline.
 - **State Persistence & Recovery**: Accumulator state persists to `/data/state/accumulator.json` across container restarts. Saved snapshots provide an audit trail.
 - **No Silent Data Loss**: A failed upload retains the accumulated window and retries it rather than discarding it.
 
@@ -123,6 +123,7 @@ MeshMapper can push wardriving pings directly to DedDrop:
 | `GET` | `/api/aircraft` | none | Accumulated aircraft in the current window |
 | `GET` | `/api/mesh-nodes` | none | Accumulated mesh nodes in the current window |
 | `GET` | `/api/snapshots` | none | Recent snapshot summaries |
+| `GET` | `/api/dispatch-log` | none | Dispatch history, newest first |
 | `GET` | `/api/user-stats` | none | Cached WDGWars profile stats |
 | `GET` | `/api/meshmapper-link` | control | Deep link (contains the API key) |
 | `GET` | `/api/mesh-ingest-report` | control | What the last MeshMapper push contained |
@@ -300,6 +301,30 @@ The approach, the 8-byte length, and the guard rails come from the reference fee
 [issue #6](https://github.com/d3mocide/DedDrop/issues/6). Two other gates are worth
 knowing: a node at `lat/lon 0,0` is refused as `no_gps` (DedDrop already drops those
 at ingest), and `node_type` no longer rejects — it coerces to `Unknown` server-side.
+
+### Dispatch Reports
+
+The dashboard's third tab is the history of what WDGWars made of each upload
+window — one row per dispatch, newest first:
+
+| Dispatched | Window | Polls | Aircraft | Mesh |
+|---|---|---|---|---|
+| 14:02 | 6.00h | 720 | 412 sent / 388 new | 16 sent / 15 new / 1 refused (bad_node_id) |
+| 08:01 | 6.00h | 719 | 390 sent / 361 new | 14 sent / 14 new |
+| 02:00 | 6.00h | 718 | 377 sent / 350 new | 11 sent / 0 new / 11 refused (bad_node_id) |
+
+A refusal and a failed delivery read differently on purpose: **refused** means
+WDGWars saw the records and itemised why it said no, while **not delivered**
+means it never returned a verdict and the window was retained for retry. A dry
+run is tagged as one.
+
+Entries are written on every flush — successes and failures alike, since the
+failures are the ones worth looking back at — and kept in
+`/data/state/dispatch_log.json`, bounded to `DISPATCH_LOG_LIMIT` (default 50).
+The same history is served at `GET /api/dispatch-log`, newest first. The tab also
+carries the MeshMapper ingest summary described below, so the two questions —
+"did my last upload land" and "is MeshMapper sending the keys" — are answered on
+one screen.
 
 ### Checking whether your pushes carry the key
 

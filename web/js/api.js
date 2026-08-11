@@ -22,6 +22,15 @@ function controlFetch(path, options = {}) {
 export const getStatus = () => getJSON('/api/status');
 export const getUserStats = () => getJSON('/api/user-stats');
 export const getSnapshots = () => getJSON('/api/snapshots');
+export const getDispatchLog = () => getJSON('/api/dispatch-log');
+
+// Control-auth: the report carries a sample of a raw ping, which is more than
+// the aggregate counters the open endpoints expose.
+export async function getMeshIngestReport() {
+  const res = await controlFetch('/api/mesh-ingest-report');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 
 export async function getTables() {
   const [aircraft, mesh] = await Promise.all([
