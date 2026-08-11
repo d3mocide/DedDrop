@@ -39,6 +39,11 @@ next_flush_attempt: float = 0.0
 user_stats: dict = {}
 user_stats_updated: float = 0.0
 
+# What the most recent MeshMapper push actually contained — the only way to see
+# whether it carries the public keys mesh node_ids are derived from. Diagnostic,
+# so it lives here rather than in the persisted state.
+mesh_ingest: dict = {}
+
 
 def sleep_interruptible(seconds: float) -> bool:
     """Sleep in short steps; return True if shutdown was requested."""
@@ -48,7 +53,7 @@ def sleep_interruptible(seconds: float) -> bool:
 def reset() -> None:
     """Restore process-start defaults. Used by tests."""
     global state, last_poll_time, last_upload, last_skipped, next_flush_attempt
-    global user_stats, user_stats_updated
+    global user_stats, user_stats_updated, mesh_ingest
     shutdown.clear()
     poll_now.clear()
     flush_now.clear()
@@ -59,3 +64,4 @@ def reset() -> None:
     next_flush_attempt = 0.0
     user_stats = {}
     user_stats_updated = 0.0
+    mesh_ingest = {}
