@@ -31,6 +31,24 @@ UPLOAD_URL = os.environ.get("WDGWARS_API_URL", "https://wdgwars.pl/endpoint/uplo
 MESH_UPLOAD_URL = (os.environ.get("WDGWARS_MESH_API_URL", "").strip() or UPLOAD_URL).strip()
 ME_URL = os.environ.get("WDGWARS_ME_URL", "https://wdgwars.pl/api/me").strip()
 
+# Optional third mesh source: an openHop Repeater (openhop-dev/openhop_repeater,
+# formerly pyMC_Repeater) you run yourself. Its adverts are merged into the same
+# mesh_accumulator MeshMapper pings feed, so they ride the existing WDGWars
+# upload pipeline. Leave the URL blank to disable this entirely.
+OPENHOP_REPEATER_URL = os.environ.get("OPENHOP_REPEATER_URL", "").strip().rstrip("/")
+OPENHOP_REPEATER_API_KEY = os.environ.get("OPENHOP_REPEATER_API_KEY", "").strip()
+OPENHOP_REPEATER_POLL_INTERVAL_SECONDS = float(
+    os.environ.get("OPENHOP_REPEATER_POLL_INTERVAL_SECONDS", "300"))
+# Only needs to comfortably exceed the poll interval above — DedDrop's own
+# cursor (persisted in STATE_FILE), not this window, is what keeps unchanged
+# nodes from being re-reported every poll.
+OPENHOP_REPEATER_LOOKBACK_HOURS = float(os.environ.get("OPENHOP_REPEATER_LOOKBACK_HOURS", "1"))
+OPENHOP_REPEATER_CONTACT_TYPES = [
+    t.strip() for t in
+    os.environ.get("OPENHOP_REPEATER_CONTACT_TYPES", "Repeater,Chat Node").split(",")
+    if t.strip()
+]
+
 # ── Timing ────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SECONDS = float(os.environ.get("POLL_INTERVAL_SECONDS", "30"))
 UPLOAD_INTERVAL_HOURS = float(os.environ.get("UPLOAD_INTERVAL_HOURS", "6"))

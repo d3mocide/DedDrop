@@ -26,6 +26,10 @@ def default_state() -> dict:
         "window_start": time.time(),
         "poll_count": 0,
         "ingested_pings_count": 0,
+        # pubkey -> last_seen of the newest openHop Repeater advert already
+        # folded into mesh_accumulator, so a re-poll of the repeater's
+        # latest-state-per-node table doesn't re-report unchanged nodes.
+        "advert_cursor": {},
     }
 
 
@@ -38,6 +42,7 @@ last_upload: dict = {}
 dispatch_log: list = []
 last_skipped: int = 0
 next_flush_attempt: float = 0.0
+next_repeater_poll: float = 0.0
 
 user_stats: dict = {}
 user_stats_updated: float = 0.0
@@ -56,7 +61,7 @@ def sleep_interruptible(seconds: float) -> bool:
 def reset() -> None:
     """Restore process-start defaults. Used by tests."""
     global state, last_poll_time, last_upload, last_skipped, next_flush_attempt
-    global user_stats, user_stats_updated, mesh_ingest, dispatch_log
+    global user_stats, user_stats_updated, mesh_ingest, dispatch_log, next_repeater_poll
     shutdown.clear()
     poll_now.clear()
     flush_now.clear()
@@ -66,6 +71,7 @@ def reset() -> None:
     dispatch_log = []
     last_skipped = 0
     next_flush_attempt = 0.0
+    next_repeater_poll = 0.0
     user_stats = {}
     user_stats_updated = 0.0
     mesh_ingest = {}

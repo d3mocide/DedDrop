@@ -11,7 +11,15 @@ from datetime import datetime, timezone
 
 from . import config, runtime, storage
 from .config import log
-from .normalize import fetch_aircraft_json, merge_into, parse_snapshot, predict_rejections
+from .normalize import (
+    fetch_aircraft_json,
+    fetch_repeater_adverts,
+    merge_into,
+    merge_mesh_records,
+    new_repeater_observations,
+    parse_snapshot,
+    predict_rejections,
+)
 from .uploader import upload_records, validate_api_key
 from .webapp import start_web_server
 
@@ -52,6 +60,43 @@ def do_poll(state: dict) -> None:
         runtime.last_skipped = skipped
 
     storage.save_state(state)
+
+
+# ── openHop Repeater ──────────────────────────────────────────────────────
+def do_repeater_poll(state: dict, *, force: bool = False) -> None:
+    """Pull newly observed node/repeater adverts from an openHop Repeater.
+
+    A no-op unless OPENHOP_REPEATER_URL and _API_KEY are both set. Runs on its
+    own interval, independent of the tar1090 poll cadence, since adverts
+    trickle in far slower than ADS-B positions do.
+    """
+    if not config.OPENHOP_REPEATER_URL or not config.OPENHOP_REPEATER_API_KEY:
+        return
+
+    now = time.time()
+    if not force and now < runtime.next_repeater_poll:
+        return
+    runtime.next_repeater_poll = now + config.OPENHOP_REPEATER_POLL_INTERVAL_SECONDS
+
+    adverts: list[dict] = []
+    for contact_type in config.OPENHOP_REPEATER_CONTACT_TYPES:
+        try:
+            adverts.extend(fetch_repeater_adverts(
+                config.OPENHOP_REPEATER_URL, config.OPENHOP_REPEATER_API_KEY, contact_type,
+                config.OPENHOP_REPEATER_LOOKBACK_HOURS, config.REQUEST_TIMEOUT_S))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            log.warning("could not reach openHop Repeater for contact_type=%r: %s",
+                        contact_type, e)
+
+    with runtime.lock:
+        records, updated_cursor = new_repeater_observations(adverts, state["advert_cursor"])
+        state["advert_cursor"] = updated_cursor
+        if records:
+            merge_mesh_records(state["mesh_accumulator"], list(records.values()))
+
+    if records:
+        log.info("observed %d new node/repeater advert(s) from openHop Repeater", len(records))
+        storage.save_state(state)
 
 
 # ── Flush ─────────────────────────────────────────────────────────────────
@@ -230,6 +275,13 @@ def main() -> int:
              config.MESH_UPLOAD_URL, config.POLL_INTERVAL_SECONDS,
              config.UPLOAD_INTERVAL_HOURS, config.DRY_RUN, config.WEB_BIND, config.WEB_PORT)
 
+    if config.OPENHOP_REPEATER_URL:
+        log.info("openHop Repeater advert source enabled: %s (poll=%gs lookback=%gh "
+                 "contact_types=%s)", config.OPENHOP_REPEATER_URL,
+                 config.OPENHOP_REPEATER_POLL_INTERVAL_SECONDS,
+                 config.OPENHOP_REPEATER_LOOKBACK_HOURS,
+                 ",".join(config.OPENHOP_REPEATER_CONTACT_TYPES))
+
     validate_api_key()
 
     state = storage.load_state()
@@ -251,6 +303,7 @@ def main() -> int:
         try:
             do_poll(state)
             do_flush(state)
+            do_repeater_poll(state)
         except urllib.error.URLError as e:
             log.error("could not reach tar1090 feed: %s", e)
         except json.JSONDecodeError as e:

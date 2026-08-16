@@ -80,6 +80,19 @@ def coerce_state(raw) -> dict:
         except (TypeError, ValueError):
             log.warning("state field %r was not a number — reset to default", key)
 
+    cursor = raw.get("advert_cursor")
+    if isinstance(cursor, dict):
+        cleaned = {}
+        for pubkey, last_seen in cursor.items():
+            try:
+                cleaned[str(pubkey)] = float(last_seen)
+            except (TypeError, ValueError):
+                continue
+        state["advert_cursor"] = cleaned
+    elif cursor is not None:
+        log.warning("state field 'advert_cursor' was %s, expected object — reset to empty",
+                    type(cursor).__name__)
+
     if state["window_start"] > time.time() + 86400:
         log.warning("state window_start is in the future — resetting to now")
         state["window_start"] = time.time()
