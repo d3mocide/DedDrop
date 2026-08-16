@@ -1,5 +1,6 @@
 """Translation of tar1090 and MeshMapper payloads into WDGWars records."""
 import unittest
+from unittest import mock
 
 import support
 from deddrop import normalize
@@ -332,6 +333,125 @@ class TestPredictRejections(unittest.TestCase):
 
     def test_nothing_to_say_about_an_empty_window(self):
         self.assertEqual(normalize.predict_rejections([]), [])
+
+
+class TestFetchRepeaterAdverts(unittest.TestCase):
+    def test_reads_the_data_array_and_sends_the_api_key(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(
+                            {"success": True, "data": [{"pubkey": KEY}]})) as urlopen:
+            rows = normalize.fetch_repeater_adverts(
+                "http://repeater/api", "sekret", "Repeater", hours=1, timeout=5)
+        self.assertEqual(rows, [{"pubkey": KEY}])
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.get_header("X-api-key"), "sekret")
+        self.assertIn("contact_type=Repeater", req.full_url)
+
+    def test_a_base_url_with_a_trailing_slash_is_not_double_slashed(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse({"success": True, "data": []})) as urlopen:
+            normalize.fetch_repeater_adverts("http://repeater/api/", "k", "Repeater", 1, 5)
+        self.assertNotIn("//adverts_by_contact_type", urlopen.call_args.args[0].full_url)
+
+    def test_success_false_yields_no_rows(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse({"success": False, "error": "nope"})):
+            rows = normalize.fetch_repeater_adverts("http://repeater/api", "k", "Repeater", 1, 5)
+        self.assertEqual(rows, [])
+
+    def test_non_dict_rows_in_data_are_dropped(self):
+        with mock.patch("urllib.request.urlopen",
+                        return_value=support.FakeResponse(
+                            {"success": True, "data": [{"pubkey": KEY}, "garbage", None]})):
+            rows = normalize.fetch_repeater_adverts("http://repeater/api", "k", "Repeater", 1, 5)
+        self.assertEqual(rows, [{"pubkey": KEY}])
+
+
+class TestNormalizeRepeaterAdvert(unittest.TestCase):
+    ADVERT = {"pubkey": KEY, "node_name": "hilltop-1", "contact_type": "Repeater",
+             "latitude": 52.1, "longitude": 21.0, "rssi": -80, "last_seen": 1700000000}
+
+    def test_the_full_key_is_used_directly_with_no_widening_heuristics(self):
+        node_id, rec = normalize.normalize_repeater_advert(self.ADVERT)
+        self.assertEqual(node_id, KEY[:16])
+        self.assertEqual(rec["node_id"], KEY[:16])
+        self.assertEqual(rec["public_key"], KEY)
+
+    def test_records_match_the_confirmed_meshcore_wire_shape(self):
+        _, rec = normalize.normalize_repeater_advert(self.ADVERT)
+        self.assertEqual(set(rec), {"node_id", "node_type", "name", "lat", "lon", "rssi",
+                                    "first_seen", "type", "public_key"})
+        self.assertEqual(rec["type"], "MESHCORE")
+
+    def test_contact_type_maps_to_node_type(self):
+        for contact_type, expected in (("Repeater", "REPEATER"), ("Chat Node", "CLIENT"),
+                                       ("Room Server", "ROOM_SERVER"), ("Sensor", "SENSOR"),
+                                       ("something new", "UNKNOWN")):
+            with self.subTest(contact_type=contact_type):
+                _, rec = normalize.normalize_repeater_advert(
+                    {**self.ADVERT, "contact_type": contact_type})
+                self.assertEqual(rec["node_type"], expected)
+
+    def test_node_name_is_used_when_present(self):
+        _, rec = normalize.normalize_repeater_advert(self.ADVERT)
+        self.assertEqual(rec["name"], "hilltop-1")
+
+    def test_missing_name_falls_back_to_node_id(self):
+        _, rec = normalize.normalize_repeater_advert({**self.ADVERT, "node_name": None})
+        self.assertEqual(rec["name"], KEY[:16])
+
+    def test_rejects_null_island_and_bad_positions(self):
+        for bad in ({"latitude": 0, "longitude": 0}, {"latitude": None, "longitude": 21.0},
+                   {"latitude": 91, "longitude": 21.0}):
+            with self.subTest(bad=bad):
+                self.assertIsNone(normalize.normalize_repeater_advert({**self.ADVERT, **bad}))
+
+    def test_rejects_a_short_or_malformed_pubkey(self):
+        self.assertIsNone(normalize.normalize_repeater_advert({**self.ADVERT, "pubkey": "aabb"}))
+
+    def test_unusable_timestamp_falls_back_to_arrival(self):
+        _, rec = normalize.normalize_repeater_advert({**self.ADVERT, "last_seen": None})
+        self.assertRegex(rec["first_seen"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+class TestNewRepeaterObservations(unittest.TestCase):
+    ADVERT = {"pubkey": KEY, "contact_type": "Repeater", "latitude": 52.1, "longitude": 21.0,
+             "rssi": -80, "last_seen": 1000.0}
+
+    def test_first_sighting_is_reported_and_cursored(self):
+        records, cursor = normalize.new_repeater_observations([self.ADVERT], {})
+        self.assertEqual(list(records), [KEY[:16]])
+        self.assertEqual(cursor[KEY], 1000.0)
+
+    def test_an_unchanged_row_is_not_re_reported(self):
+        """The repeater's table holds one row per node — re-polling it must not
+        re-report a node whose position has not actually moved."""
+        records, _ = normalize.new_repeater_observations([self.ADVERT], {KEY: 1000.0})
+        self.assertEqual(records, {})
+
+    def test_a_newer_last_seen_is_reported_again(self):
+        newer = {**self.ADVERT, "last_seen": 2000.0}
+        records, cursor = normalize.new_repeater_observations([newer], {KEY: 1000.0})
+        self.assertEqual(list(records), [KEY[:16]])
+        self.assertEqual(cursor[KEY], 2000.0)
+
+    def test_the_cursor_for_untouched_nodes_is_preserved(self):
+        _, cursor = normalize.new_repeater_observations([self.ADVERT], {OTHER_KEY: 5.0})
+        self.assertEqual(cursor[OTHER_KEY], 5.0)
+
+    def test_non_dict_and_keyless_entries_are_skipped(self):
+        records, cursor = normalize.new_repeater_observations(
+            ["garbage", {}, {"pubkey": ""}], {})
+        self.assertEqual(records, {})
+        self.assertEqual(cursor, {})
+
+    def test_a_row_that_fails_normalization_does_not_advance_the_cursor(self):
+        """Null-island noise shouldn't quietly poison the cursor against a later
+        real advert from the same node landing in the same poll."""
+        bad = {**self.ADVERT, "latitude": 0, "longitude": 0}
+        records, cursor = normalize.new_repeater_observations([bad], {})
+        self.assertEqual(records, {})
+        self.assertEqual(cursor, {})
 
 
 if __name__ == "__main__":

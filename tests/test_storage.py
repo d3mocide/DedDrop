@@ -44,6 +44,25 @@ class TestState(support.TempConfig):
         self.assertEqual(list(state["mesh_accumulator"]), ["good"])
         self.assertEqual(state["poll_count"], 0)
 
+    def test_advert_cursor_round_trips(self):
+        state = runtime.default_state()
+        state["advert_cursor"]["aabbccdd11223344"] = 1700000000.5
+        storage.save_state(state)
+        self.assertEqual(storage.load_state()["advert_cursor"],
+                         {"aabbccdd11223344": 1700000000.5})
+
+    def test_advert_cursor_wrong_types_are_repaired(self):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(json.dumps({
+            "advert_cursor": {"good": 123.0, "bad": "not-a-number"},
+        }))
+        self.assertEqual(storage.load_state()["advert_cursor"], {"good": 123.0})
+
+    def test_non_object_advert_cursor_is_reset_to_empty(self):
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(json.dumps({"advert_cursor": ["not", "a", "dict"]}))
+        self.assertEqual(storage.load_state()["advert_cursor"], {})
+
     def test_top_level_non_object_is_repaired(self):
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text("[1, 2, 3]")

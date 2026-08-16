@@ -1,6 +1,8 @@
 """Poll and flush lifecycle."""
 import json
+import time
 import unittest
+import urllib.error
 from unittest import mock
 
 import support
@@ -257,6 +259,63 @@ class TestPoll(support.TempConfig):
                                side_effect=[OSError("read-only fs"), None]):
             service.do_poll(state)
         self.assertEqual(state["poll_count"], 1)
+
+
+class TestRepeaterPoll(support.TempConfig):
+    ADVERT = {"pubkey": "aabb0f1e2d3c4b5a" + "9" * 48, "contact_type": "Repeater",
+             "latitude": 52.1, "longitude": 21.0, "rssi": -80, "last_seen": 1700000000.0}
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.multiple(
+            config, OPENHOP_REPEATER_URL="http://repeater/api",
+            OPENHOP_REPEATER_API_KEY="sekret", OPENHOP_REPEATER_CONTACT_TYPES=["Repeater"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_disabled_without_url_or_key(self):
+        state = runtime.default_state()
+        with mock.patch.object(config, "OPENHOP_REPEATER_URL", ""), \
+             mock.patch.object(service, "fetch_repeater_adverts") as fetch:
+            service.do_repeater_poll(state, force=True)
+        fetch.assert_not_called()
+
+    def test_a_new_advert_is_merged_into_the_mesh_accumulator(self):
+        state = runtime.default_state()
+        with mock.patch.object(service, "fetch_repeater_adverts", return_value=[self.ADVERT]):
+            service.do_repeater_poll(state, force=True)
+        self.assertEqual(len(state["mesh_accumulator"]), 1)
+        self.assertEqual(state["advert_cursor"][self.ADVERT["pubkey"]], 1700000000.0)
+
+    def test_an_unchanged_advert_is_not_re_merged_on_the_next_poll(self):
+        """The repeater's table holds one row per node — a re-poll of the same
+        latest-known state must not keep re-adding it to the accumulator."""
+        state = runtime.default_state()
+        with mock.patch.object(service, "fetch_repeater_adverts", return_value=[self.ADVERT]):
+            service.do_repeater_poll(state, force=True)
+            service.do_repeater_poll(state, force=True)
+        self.assertEqual(len(state["mesh_accumulator"]), 1)
+
+    def test_state_is_only_saved_when_something_new_landed(self):
+        state = runtime.default_state()
+        with mock.patch.object(service, "fetch_repeater_adverts", return_value=[]), \
+             mock.patch.object(storage, "save_state") as save:
+            service.do_repeater_poll(state, force=True)
+        save.assert_not_called()
+
+    def test_without_force_it_respects_its_own_poll_interval(self):
+        state = runtime.default_state()
+        runtime.next_repeater_poll = time.time() + 999
+        with mock.patch.object(service, "fetch_repeater_adverts") as fetch:
+            service.do_repeater_poll(state)
+        fetch.assert_not_called()
+
+    def test_an_unreachable_repeater_does_not_raise(self):
+        state = runtime.default_state()
+        with mock.patch.object(service, "fetch_repeater_adverts",
+                               side_effect=urllib.error.URLError("no route")):
+            service.do_repeater_poll(state, force=True)  # must not raise
+        self.assertEqual(state["mesh_accumulator"], {})
 
 
 class TestPreflight(support.TempConfig):

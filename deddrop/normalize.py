@@ -7,6 +7,7 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -54,6 +55,31 @@ def fetch_aircraft_json(url: str, timeout: float) -> dict:
         raw = gzip.decompress(raw)
 
     return json.loads(raw.decode("utf-8"))
+
+
+def fetch_repeater_adverts(base_url: str, api_key: str, contact_type: str,
+                           hours: float, timeout: float) -> list[dict]:
+    """GET one contact type's adverts from an openHop Repeater's local API.
+
+    The repeater's ``adverts`` table holds one row per node — its latest
+    observed state, not a log of every advert heard — so ``hours`` only needs
+    to comfortably cover the poll interval. Widening it does not recover
+    missed observations, it just re-reports ones already seen.
+    """
+    query = urllib.parse.urlencode({"contact_type": contact_type, "hours": hours, "limit": 500})
+    url = f"{base_url.rstrip('/')}/adverts_by_contact_type?{query}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT, "Accept": "application/json", "X-API-Key": api_key,
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    if not isinstance(payload, dict) or not payload.get("success"):
+        log.debug("openHop Repeater returned no usable adverts for contact_type=%r: %r",
+                  contact_type, payload if isinstance(payload, dict) else type(payload).__name__)
+        return []
+    data = payload.get("data")
+    return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
 
 
 def _coerce_int(v) -> int:
@@ -377,3 +403,92 @@ def merge_mesh_records(mesh_acc: dict[str, dict], new_records: list[dict]) -> No
         if existing:
             rec["first_seen"] = existing["first_seen"]
         mesh_acc[node_id] = rec
+
+
+# ── openHop Repeater (observed node/repeater adverts) ───────────────────────
+# A repeater you run yourself hands over each node's full public key rather
+# than an on-air short id, so node_id is simply its first 8 bytes — none of
+# the widening heuristics or heard_repeats resolution the MeshMapper path
+# above needs, since there is no short id to widen in the first place.
+_CONTACT_TYPE_NODE_TYPE = {
+    "repeater": "REPEATER",
+    "chat node": "CLIENT",
+    "room server": "ROOM_SERVER",
+    "sensor": "SENSOR",
+}
+
+
+def normalize_repeater_advert(advert: dict) -> tuple[str, dict] | None:
+    """One row from GET /adverts_by_contact_type into a WDGWars mesh record."""
+    pubkey = str(advert.get("pubkey") or "").lower().strip()
+    if not _PUBLIC_KEY_RE.match(pubkey):
+        return None
+
+    lat, lon = advert.get("latitude"), advert.get("longitude")
+    if lat is None or lon is None:
+        return None
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    if (lat == 0 and lon == 0) or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
+
+    observed_at = advert.get("last_seen") or advert.get("timestamp")
+    try:
+        first_seen = datetime.fromtimestamp(float(observed_at), tz=timezone.utc).strftime(_TS_FMT)
+    except (TypeError, ValueError, OSError, OverflowError):
+        first_seen = _now_str()
+
+    node_id = pubkey[:_NODE_ID_HEX]
+    node_type = _CONTACT_TYPE_NODE_TYPE.get(
+        str(advert.get("contact_type") or "").strip().lower(), "UNKNOWN")
+    name = str(advert.get("node_name") or "").strip() or node_id
+
+    return node_id, {
+        "node_id": node_id,
+        "node_type": node_type,
+        "name": name,
+        "lat": round(lat, 6),
+        "lon": round(lon, 6),
+        "rssi": _coerce_int_opt(advert.get("rssi")),
+        "first_seen": first_seen,
+        "type": "MESHCORE",
+        "public_key": pubkey,
+    }
+
+
+def new_repeater_observations(adverts: list, cursor: dict[str, float]
+                              ) -> tuple[dict[str, dict], dict[str, float]]:
+    """Split a repeater poll into records genuinely new since the last one.
+
+    The repeater's table holds one row per node — its latest state, not a log
+    of every advert heard — so polling it on an interval would otherwise
+    re-report every node's unchanged position each time: exactly the "whole
+    nodes database" a trickle feed is meant to avoid. Comparing each row's
+    last_seen against what was already captured for that pubkey turns it back
+    into a trickle of only the observations that actually moved.
+    """
+    records: dict[str, dict] = {}
+    updated = dict(cursor)
+    for advert in adverts:
+        if not isinstance(advert, dict):
+            continue
+        pubkey = str(advert.get("pubkey") or "").lower().strip()
+        if not pubkey:
+            continue
+        try:
+            observed_at = float(advert.get("last_seen") or advert.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            continue
+        if observed_at <= cursor.get(pubkey, 0.0):
+            continue
+
+        result = normalize_repeater_advert(advert)
+        if result is None:
+            continue
+        node_id, record = result
+        records[node_id] = record
+        updated[pubkey] = observed_at
+
+    return records, updated

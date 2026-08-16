@@ -6,6 +6,7 @@
 
 - **ADS-B Aircraft Accumulator**: Polls `aircraft.json` from readsb/tar1090 (default: 30s), accumulates seen aircraft in memory, and flushes HMAC-signed batches to WDGWars (default: 6h).
 - **MeshMapper Wardrive Target**: Built-in HTTP ingest endpoint (`/api/wardrive`) for receiving LoRa wardriving nodes directly from MeshMapper. Node IDs are derived from each node's public key where the push carries one, so they clear the WDGWars gate instead of coming back as `bad_node_id`.
+- **openHop Repeater Advert Source**: Optional poller that pulls newly observed node/repeater adverts from an [openHop Repeater](https://github.com/openhop-dev/openhop_repeater) you run yourself, merging them into the same mesh upload MeshMapper feeds.
 - **Web Dashboard**: Interactive monitoring UI with real-time stats, live node/aircraft tables, a **Dispatch Reports** tab holding what WDGWars made of each upload window, manual Poll/Flush triggers, and a MeshMapper deep-link setup modal. Native ES modules with no build step, a strict CSP, and no external CDN or font requests — it works fully offline.
 - **State Persistence & Recovery**: Accumulator state persists to `/data/state/accumulator.json` across container restarts. Saved snapshots provide an audit trail.
 - **No Silent Data Loss**: A failed upload retains the accumulated window and retries it rather than discarding it.
@@ -44,6 +45,16 @@
 | `WDGWARS_MESH_API_URL` | *(same as `WDGWARS_API_URL`)* | Upload endpoint for signed mesh batches, if it differs |
 | `WDGWARS_ME_URL` | `https://wdgwars.pl/api/me` | Profile/stats endpoint used by the dashboard |
 | `MESHMAPPER_API_KEY` | `WDGWARS_API_KEY` | Optional separate API key for MeshMapper ingest |
+
+### openHop Repeater (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENHOP_REPEATER_URL` | *(empty)* | Base URL of your repeater's web API, including `/api` (e.g. `http://192.168.1.50:8000/api`). Leave empty to disable this source entirely |
+| `OPENHOP_REPEATER_API_KEY` | *(empty)* | API token minted on the repeater (Settings → API Tokens, or `POST /auth/tokens`) |
+| `OPENHOP_REPEATER_POLL_INTERVAL_SECONDS` | `300` | How often to poll the repeater for newly observed adverts |
+| `OPENHOP_REPEATER_LOOKBACK_HOURS` | `1` | How far back each poll asks the repeater to look |
+| `OPENHOP_REPEATER_CONTACT_TYPES` | `Repeater,Chat Node` | Comma-separated contact types to pull (repeater's own names: `Repeater`, `Chat Node`, `Room Server`, `Sensor`) |
 
 ### Timing
 
@@ -111,6 +122,32 @@ MeshMapper can push wardriving pings directly to DedDrop:
   so the link carries `host/api/wardrive` rather than `http://host/api/wardrive` — the
   latter imports as `https://http://host/api/wardrive`. DedDrop itself serves plain
   HTTP, so put it behind a TLS-terminating reverse proxy for MeshMapper to reach it.
+
+## openHop Repeater Integration
+
+If you run your own [openHop Repeater](https://github.com/openhop-dev/openhop_repeater)
+(formerly `pyMC_Repeater`), DedDrop can pull the node and repeater adverts it has
+personally observed and fold them into the same WDGWars mesh upload MeshMapper feeds —
+a second, independent view of the mesh from wherever your repeater sits.
+
+- **Get an API key**: on the repeater's dashboard, mint a token under Settings → API
+  Tokens (or `POST /auth/tokens` with a JWT from `/auth/login`). Set it as
+  `OPENHOP_REPEATER_API_KEY`, and point `OPENHOP_REPEATER_URL` at the repeater's API
+  base, e.g. `http://192.168.1.50:8000/api`.
+- **A trickle, not a database dump**: the repeater's `adverts` table holds exactly one
+  row per node — its latest observed state, not a log of every advert heard. DedDrop
+  polls `GET /adverts_by_contact_type` on `OPENHOP_REPEATER_POLL_INTERVAL_SECONDS`
+  (default 5 min), but only ever reports a node whose `last_seen` is newer than what it
+  already captured for that node — a cursor persisted in `STATE_FILE`. A poll that finds
+  nothing new merges nothing and writes nothing; only genuinely new observations reach
+  the accumulator.
+- **No widening heuristics needed**: unlike MeshMapper pings, the repeater hands over
+  each node's full 64-hex public key directly, so `node_id` is simply its first 8 bytes
+  — the same derivation WDGWars confirms, with no on-air short id to reconstruct and no
+  `heard_repeats` prefix-matching involved.
+- **What gets pulled**: `OPENHOP_REPEATER_CONTACT_TYPES` (default `Repeater,Chat Node`)
+  controls which of the repeater's own contact types are polled; `Room Server` and
+  `Sensor` are also valid if you want those too.
 
 ## HTTP API
 
